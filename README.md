@@ -1,223 +1,180 @@
-# Quorum-Based Election Decryption
 
-This implementation provides **true quorum-based decryption** for ElectionGuard elections, solving the problem where all guardians need to be present to decrypt election results.
+# ElectionGuard Python API
 
-## The Problem
+This repository contains a Python-based implementation of the ElectionGuard API, providing a secure and verifiable voting system. It includes a Flask-based API for interacting with the ElectionGuard protocol, as well as a sample simulation to demonstrate its end-to-end functionality. The API also features post-quantum cryptographic enhancements for long-term security.
 
-The original API (`api.py`) required **ALL guardians** to be present to decrypt election results. This creates a single point of failure - if any guardian is unavailable, the entire election cannot be decrypted.
+## Table of Contents
 
-## The Solution
+- [About The Project](#about-the-project)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+- [Usage](#usage)
+  - [Running the API Server](#running-the-api-server)
+  - [Running the Sample Election Simulation](#running-the-sample-election-simulation)
+- [API Reference](#api-reference)
+  - [Health Check](#health-check)
+  - [Election Setup](#election-setup)
+  - [Ballot Encryption](#ballot-encryption)
+  - [Tallying and Decryption](#tallying-and-decryption)
+- [File Structure](#file-structure)
+- [Docker](#docker)
+  - [Building the Docker Image](#building-the-docker-image)
+  - [Running the Docker Container](#running-the-docker-container)
+- [Contributing](#contributing)
+- [License](#license)
+- [Contact](#contact)
 
-The new implementation (`api_quorum.py`) uses **ElectionGuard's compensated decryption** mechanism, which implements threshold cryptography using:
+## About The Project
 
-- **Polynomial Secret Sharing**: Secrets are split using Shamir's Secret Sharing scheme
-- **Lagrange Coefficient Reconstruction**: Missing guardian shares are reconstructed mathematically
-- **Compensated Decryption**: Available guardians can compute shares for missing guardians using their backup polynomial coordinates
+This project provides a Python implementation of Microsoft's ElectionGuard, a free and open-source software development kit (SDK) that enables end-to-end verifiability and security for elections. It aims to make voting more secure, transparent, and publicly verifiable.
 
-## Key Features
+This implementation includes:
 
-### 1. True Quorum Support
-- Only `quorum` number of guardians needed out of `total` guardians
-- Example: 3 out of 5 guardians can decrypt the election
-- Provides resilience against guardian unavailability
+- A Flask-based API to expose ElectionGuard's core functionalities.
+- An end-to-end election simulation demonstrating the entire voting process.
+- Integration of post-quantum cryptography (Kyber1024) to ensure long-term security against future threats.
+- A clear and modular code structure for easy understanding and extension.
 
-### 2. Cryptographic Security
-- Uses ElectionGuard's proven cryptographic protocols
-- Maintains end-to-end verifiability
-- No compromise in security despite fewer guardians
+## Getting Started
 
-### 3. Compensated Decryption
-- Available guardians compute normal decryption shares
-- Same guardians compute compensated shares for missing guardians
-- Mathematical reconstruction using Lagrange coefficients
+To get a local copy up and running, follow these simple steps.
 
-## API Endpoints
+### Prerequisites
 
-### Setup Election
-```
-POST /setup_guardians
-{
-    "number_of_guardians": 5,
-    "quorum": 3,
-    "party_names": ["Democratic", "Republican"],
-    "candidate_names": ["Alice", "Bob"]
-}
-```
+This project uses Python 3.10+. You will also need to install the dependencies listed in the `requirements.txt` file.
 
-### Create Ballot
-```
-POST /create_encrypted_ballot
-{
-    "party_names": ["Democratic", "Republican"],
-    "candidate_names": ["Alice", "Bob"],
-    "candidate_name": "Alice",
-    "ballot_id": "ballot-001",
-    "joint_public_key": "...",
-    "commitment_hash": "..."
-}
-```
+### Installation
 
-### Create Tally
-```
-POST /create_encrypted_tally
-{
-    "party_names": ["Democratic", "Republican"],
-    "candidate_names": ["Alice", "Bob"],
-    "joint_public_key": "...",
-    "commitment_hash": "...",
-    "encrypted_ballots": [...]
-}
-```
+1. **Clone the repository:**
 
-### Decryption Process (3 steps)
+   ```sh
+   git clone https://github.com/your_username/Electionguard-Python-API.git
+   cd Electionguard-Python-API
+   ```
 
-#### 1. Create Partial Decryption (for available guardians)
-```
-POST /create_partial_decryption
-{
-    "guardian_id": "guardian-1",
-    "guardian_data": [...],
-    "party_names": ["Democratic", "Republican"],
-    "candidate_names": ["Alice", "Bob"],
-    "ciphertext_tally": "...",
-    "submitted_ballots": [...],
-    "joint_public_key": "...",
-    "commitment_hash": "..."
-}
+2. **Create and activate a virtual environment (recommended):**
+
+   ```sh
+   python -m venv venv
+   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+   ```
+
+3. **Install the dependencies:**
+
+   ```sh
+   pip install -r requirements.txt
+   ```
+
+## Usage
+
+This project can be used in two main ways: by running the API server or by running the sample election simulation.
+
+### Running the API Server
+
+The API server provides a way to interact with the ElectionGuard protocol through a series of RESTful endpoints.
+
+To start the API server, run the following command:
+
+```sh
+python api.py
 ```
 
-#### 2. Create Compensated Decryption (for missing guardians)
-```
-POST /create_compensated_decryption
-{
-    "available_guardian_id": "guardian-1",
-    "missing_guardian_id": "guardian-4",
-    "guardian_data": [...],
-    "party_names": ["Democratic", "Republican"],
-    "candidate_names": ["Alice", "Bob"],
-    "ciphertext_tally": "...",
-    "submitted_ballots": [...],
-    "joint_public_key": "...",
-    "commitment_hash": "..."
-}
+The server will start on `http://127.0.0.1:5000`.
+
+### Running the Sample Election Simulation
+
+The sample election simulation demonstrates the entire end-to-end process of an election, from setting up guardians to tallying and decrypting the votes.
+
+To run the simulation, execute the following command:
+
+```sh
+python sample_election_simulation.py
 ```
 
-#### 3. Combine Decryption Shares
-```
-POST /combine_decryption_shares
-{
-    "party_names": ["Democratic", "Republican"],
-    "candidate_names": ["Alice", "Bob"],
-    "joint_public_key": "...",
-    "commitment_hash": "...",
-    "ciphertext_tally": "...",
-    "submitted_ballots": [...],
-    "guardian_data": [...],
-    "available_guardian_shares": {...},
-    "compensated_shares": {...},
-    "quorum": 3
-}
-```
+The script will print the election results to the console.
 
-## How It Works
+## API Reference
 
-### 1. Key Ceremony
-- Guardians generate polynomial shares during setup
-- Each guardian stores encrypted backup coordinates for other guardians
-- Joint public key is created for encryption
+The following are the main endpoints provided by the API:
 
-### 2. Encryption Phase
-- Ballots are encrypted using the joint public key
-- Multiple ballots are tallied into a single ciphertext tally
+### Health Check
 
-### 3. Decryption Phase
-- **Available guardians** compute their normal decryption shares
-- **Same guardians** compute compensated shares for missing guardians using backup coordinates
-- **DecryptionMediator** combines all shares using Lagrange coefficient reconstruction
-- Final plaintext results are produced
+- **GET /health**: Checks the health of the API.
 
-## Mathematical Foundation
+### Election Setup
 
-The system uses **Shamir's Secret Sharing** over elliptic curves:
+- **POST /setup_guardians**: Sets up the election guardians and generates a joint public key.
+- **POST /create_election_manifest**: Creates the election manifest.
 
-1. **Secret Sharing**: The secret key is split into `n` shares such that any `k` shares can reconstruct the secret
-2. **Lagrange Interpolation**: Missing shares are reconstructed using polynomial interpolation
-3. **Compensated Decryption**: Available guardians use their backup polynomial coordinates to compute shares for missing guardians
+### Ballot Encryption
 
-## Files
+- **POST /create_encrypted_ballot**: Encrypts a single ballot.
 
-- `api_quorum.py` - Main API with quorum support
-- `test_quorum.py` - Comprehensive test suite
-- `test_quorum_simple.py` - Simple comparison test
-- `README_quorum.md` - This documentation
+### Tallying and Decryption
 
-## Running the Tests
+- **POST /create_encrypted_tally**: Tallies all the encrypted ballots.
+- **POST /create_partial_decryption**: Computes a guardian's partial decryption of the tally.
+- **POST /combine_decryption_shares**: Combines the partial decryptions to get the final election results.
 
-### Start the API server:
-```bash
-cd Microservice
-python api_quorum.py
-```
+For more details on the API request and response formats, please refer to the `APIformat.txt` file.
 
-### Run comprehensive tests:
-```bash
-python test_quorum.py
-```
+## File Structure
 
-### Run simple comparison test:
-```bash
-python test_quorum_simple.py
-```
-
-## Example Output
+Here is a brief overview of the project's file structure:
 
 ```
-QUORUM vs ALL-GUARDIANS DECRYPTION COMPARISON
-==============================================
-
-Setting up: 5 guardians, 3 quorum
-✅ Election setup complete
-   - Total guardians: 5
-   - Quorum needed: 3
-
-✅ Ballot encrypted and tallied
-
-🔹 SCENARIO 1: Quorum-based decryption (3 out of 5 guardians)
-Available guardians: ['guardian-1', 'guardian-2', 'guardian-3']
-Missing guardians: ['guardian-4', 'guardian-5']
-
-✅ SUCCESS: Quorum-based decryption worked!
-   - Used 3 out of 5 guardians
-   - Results: Alice = 1 votes
-   - Results: Bob = 0 votes
-   - This is the NEW APPROACH - only quorum needed!
-
-🔹 SCENARIO 2: What the old approach would require
-❌ OLD APPROACH: Would need ALL 5 guardians to be present
-❌ If any guardian is missing, election cannot be decrypted
-❌ This is the problem we solved with quorum-based decryption!
-
-SUMMARY:
-✅ NEW: Only 3 out of 5 guardians needed (quorum)
-❌ OLD: All 5 guardians required (single point of failure)
-✅ NEW: Uses ElectionGuard's compensated decryption and Lagrange coefficients
-✅ NEW: Provides cryptographic security with practical resilience
+├── electionguard/              # Core ElectionGuard library
+├── electionguard_tools/        # Tools for working with ElectionGuard
+├── services/                   # Business logic for the API endpoints
+├── files_for_testing/          # Files for testing purposes
+├── io/                         # Input/output files for the API
+├── __init__.py                 # Package initializer
+├── api.py                      # Flask API application
+├── sample_election_simulation.py # End-to-end election simulation
+├── Dockerfile                  # Docker configuration
+├── requirements.txt            # Project dependencies
+└── README.md                   # This file
 ```
 
-## Benefits
+## Docker
 
-1. **Resilience**: Elections can be decrypted even if some guardians are unavailable
-2. **Security**: No compromise in cryptographic security
-3. **Verifiability**: Full end-to-end verifiability is maintained
-4. **Practicality**: Reduces operational complexity and single points of failure
-5. **Standard Compliance**: Uses standard ElectionGuard protocols
+This project includes a `Dockerfile` to allow you to build and run the application in a containerized environment.
 
-## Technical Details
+### Building the Docker Image
 
-The implementation leverages these ElectionGuard modules:
-- `decryption_mediator.py` - Orchestrates the decryption process
-- `decryption_share.py` - Handles individual guardian shares
-- `election_polynomial.py` - Manages polynomial operations
-- `decrypt_with_shares.py` - Combines shares for final decryption
+To build the Docker image, run the following command from the root of the project:
 
-This provides a production-ready, cryptographically secure quorum-based election system.
+```sh
+docker build -t electionguard-api .
+```
+
+### Running the Docker Container
+
+To run the Docker container, use the following command:
+
+```sh
+docker run -p 5000:5000 electionguard-api
+```
+
+The API will be accessible at `http://localhost:5000`.
+
+## Contributing
+
+Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for more information.
+
+## Contact
+
+Your Name - your_email@example.com
+
+Project Link: [https://github.com/your_username/Electionguard-Python-API](https://github.com/your_username/Electionguard-Python-API)
