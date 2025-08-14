@@ -1,0 +1,24 @@
+
+Creating encrypted ballots...
+🔐 Ballot ID: ballot-masnoon, Encrypted Hash: acf70fe93e604526135b9c938995130b594b1cca617c6f74b52ef825b2c790c0
+🔐 Ballot ID: ballot-tawkir, Encrypted Hash: f072f28f7f7b0498e351bfc7fae8f8ffb0a5cb7387685989ca458a6ab98c77a3
+Created partial decryption for guardian 1
+Created partial decryption for guardian 2
+Created partial decryption for guardian 3
+
+Combining decryptions...
+Final results obtained!
+
+=== ELECTION RESULTS ===
+Valid ballots: 2
+Spoiled ballots: 0
+
+Candidate Results:
+Candidate 1: 1 votes (50.0%)
+Candidate 2: 1 votes (50.0%)
+
+Verification Status:
+Hash for ballot ballot-masnoon: acf70fe93e604526135b9c938995130b594b1cca617c6f74b52ef825b2c790c0
+Ballot ballot-masnoon: cast - Verification: success
+Hash for ballot ballot-tawkir: f072f28f7f7b0498e351bfc7fae8f8ffb0a5cb7387685989ca458a6ab98c77a3
+Ballot ballot-tawkir: cast - Verification: success
