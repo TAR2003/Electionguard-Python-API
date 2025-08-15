@@ -1,0 +1,15 @@
+{
+    "guardian_id": "guardian_1",
+    "sequence_order": 1,
+    "public_key": "123456789",
+    "number_of_guardians": 3,
+    "quorum": 2,
+    "party_names": [
+        "Party A",
+        "Party B"
+    ],
+    "candidate_names": [
+        "Alice",
+        "Bob"
+    ]
+}

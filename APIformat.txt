@@ -3984,3 +3984,45 @@ End of combine_decryption_shares_response
 ------------------
 
 
+
+---------------
+Data: setup_guardian
+guardian_id: str
+sequence_order: int
+public_key: str
+number_of_guardians: int
+quorum: int
+party_names: list of (str)
+candidate_names: list of (str)
+End of setup_guardian
+------------------
+
+
+
+---------------
+Data: setup_guardian
+guardian_id: str
+sequence_order: int
+public_key: str
+number_of_guardians: int
+quorum: int
+party_names: list of (str)
+candidate_names: list of (str)
+End of setup_guardian
+------------------
+
+
+
+---------------
+Data: setup_guardian_response
+status: str
+guardian_id: str
+sequence_order: int
+guardian_data: str
+election_public_key: str
+number_of_guardians: int
+quorum: int
+End of setup_guardian_response
+------------------
+
+

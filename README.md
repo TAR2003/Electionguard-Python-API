@@ -136,12 +136,25 @@ Electionguard-Python-API/
 ## API Endpoints
 
 The API exposes endpoints for:
-- Guardian setup and key ceremonies
-- Ballot encryption and submission
-- Tallying and decryption (including compensated shares)
-- Data retrieval and simulation
+- **Guardian Setup (New!)**: Individual guardian setup with local key generation
+  - `/setup_guardian` - Guardian sends only public key, server generates election structures
+  - `/setup_guardians` - Traditional full guardian setup (for backward compatibility)
+- **Ballot Encryption**: Individual ballot encryption and submission
+- **Tallying and Decryption**: Including compensated shares for missing guardians
+- **Data Retrieval**: Election results and verification data
 
-See `APIformat.txt` for detailed request/response formats and example payloads.
+### New Guardian Setup Process
+
+The **setup guardian** step has been updated with enhanced security:
+
+1. **Guardian generates locally**: Private key, public key, and polynomial
+2. **Guardian sends to server**: Only the public key via `/setup_guardian` API
+3. **Server generates**: Election structures, commitments, and proofs using the public key
+4. **Guardian retains**: Private key and polynomial remain local and secret
+
+This ensures that sensitive cryptographic material never leaves the guardian's control.
+
+See `APIformat.txt` and `setup_guardian_api_format.txt` for detailed request/response formats.
 
 ---
 
