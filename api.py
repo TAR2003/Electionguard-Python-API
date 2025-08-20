@@ -101,6 +101,10 @@ from services.create_partial_decryption_shares import compute_ballot_shares, com
 from services.create_encrypted_ballot import create_election_manifest, create_plaintext_ballot
 from services.create_encrypted_tally import ciphertext_tally_to_raw, raw_to_ciphertext_tally
 
+# Import ballot sanitization modules
+from ballot_sanitizer import prepare_ballot_for_publication, process_ballot_response
+from ballot_publisher import BallotPublisher
+
 # Import post-quantum cryptography (Kyber1024)
 try:
     import pqcrypto.kem.ml_kem_1024 as kyber1024
@@ -134,6 +138,9 @@ elif isinstance(MASTER_KEY, str):
 
 # Rate limiting storage (in production, use Redis/database)
 rate_limit_storage = {}
+
+# Initialize secure ballot publisher
+ballot_publisher = BallotPublisher()
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -451,7 +458,7 @@ def api_setup_guardians():
 
 @app.route('/create_encrypted_ballot', methods=['POST'])
 def api_create_encrypted_ballot():
-    """API endpoint to create and encrypt a ballot."""
+    """API endpoint to create and encrypt a ballot with secure publication."""
     try:
         print('create encrypted ballot call at the microservice')
         data = request.json
@@ -462,6 +469,11 @@ def api_create_encrypted_ballot():
         joint_public_key = data['joint_public_key']  # Expecting string
         commitment_hash = data['commitment_hash']    # Expecting string
         
+        # Get ballot status for secure publication (default to CAST for security)
+        ballot_status = data.get('ballot_status', 'CAST').upper()
+        if ballot_status not in ['CAST', 'AUDITED']:
+            ballot_status = 'CAST'  # Default to most secure option
+        
         print_json(data, "create_encrypted_ballot")
         print_data(data, "./io/create_encrypted_ballot_request.json")
 
@@ -469,7 +481,7 @@ def api_create_encrypted_ballot():
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
         quorum = safe_int_conversion(data.get('quorum', 1))
         
-        # Call service function
+        # Call service function to create the encrypted ballot
         result = create_encrypted_ballot_service(
             party_names,
             candidate_names,
@@ -489,17 +501,56 @@ def api_create_encrypted_ballot():
             election_data['encrypted_ballots'] = []
         election_data['encrypted_ballots'].append(result['encrypted_ballot'])
         
-        response = {
+        # Create the complete ballot response for sanitization
+        complete_ballot_response = {
             'status': 'success',
             'encrypted_ballot': result['encrypted_ballot'],
             'ballot_hash': result['ballot_hash']
         }
+        
+        # Apply secure ballot publication based on ballot status
+        try:
+            publication_result = ballot_publisher.publish_ballot(
+                ballot_id=ballot_id,
+                encrypted_ballot_response=json.dumps(complete_ballot_response),
+                ballot_status=ballot_status
+            )
+            
+            # Create the final response based on ballot status
+            response = {
+                'status': 'success',
+                'ballot_id': ballot_id,
+                'ballot_status': ballot_status,
+                'ballot_hash': publication_result['ballot_hash'],
+                'encrypted_ballot': publication_result['encrypted_ballot'],
+                'publication_status': publication_result['publication_status']
+            }
+            
+            # Add nonces only for audited ballots
+            if ballot_status == 'AUDITED' and 'ballot_nonces' in publication_result:
+                response['ballot_nonces'] = publication_result['ballot_nonces']
+                response['nonces_available'] = True
+            else:
+                response['nonces_available'] = False
+                
+        except Exception as sanitization_error:
+            print(f"Sanitization error: {sanitization_error}")
+            # Fallback to unsanitized response if sanitization fails
+            response = {
+                'status': 'success',
+                'encrypted_ballot': result['encrypted_ballot'],
+                'ballot_hash': result['ballot_hash'],
+                'warning': 'Ballot published without sanitization due to error',
+                'sanitization_error': str(sanitization_error)
+            }
+        
+        # Save the response to file for debugging
         with open("create_encrypted_ballot_response.json", "w", encoding="utf-8") as f:
             json.dump(response, f, ensure_ascii=False, indent=2)
 
         print_json(response, "create_encrypted_ballot_response")
         print_data(response, "./io/create_encrypted_ballot_response.json")
-        print('finished encrypting ballot at the microservice')
+        print(f'finished encrypting ballot at the microservice - Status: {ballot_status}')
         return jsonify(response), 200
     
     except ValueError as e:
@@ -510,7 +561,97 @@ def api_create_encrypted_ballot():
 @app.route('/health', methods=['GET'])
 def api_health_check():
     """API endpoint for health check."""
-    return jsonify({'status': 'healthy'}), 200
+    stats = ballot_publisher.get_publication_stats()
+    return jsonify({
+        'status': 'healthy', 
+        'ballot_publication_stats': stats
+    }), 200
+
+@app.route('/ballots/<ballot_id>', methods=['GET'])
+def api_get_published_ballot(ballot_id):
+    """API endpoint to retrieve a published ballot (sanitized based on status)."""
+    try:
+        ballot = ballot_publisher.get_published_ballot(ballot_id)
+        if ballot:
+            return jsonify(ballot), 200
+        return jsonify({"error": "Ballot not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/ballots/<ballot_id>/nonces', methods=['GET'])
+def api_get_ballot_nonces(ballot_id):
+    """API endpoint to get nonces for a ballot (only available for audited ballots)."""
+    try:
+        nonces = ballot_publisher.get_ballot_nonces(ballot_id)
+        if nonces:
+            return jsonify({
+                "ballot_id": ballot_id, 
+                "nonces": nonces,
+                "status": "AUDITED",
+                "nonce_count": len(nonces)
+            }), 200
+        
+        # Check if ballot exists but is cast (no nonces available)
+        ballot = ballot_publisher.get_published_ballot(ballot_id)
+        if ballot and not ballot.get('nonces_available', False):
+            return jsonify({
+                "error": "Nonces not available for cast ballots", 
+                "ballot_status": "CAST",
+                "message": "Nonces are only available for audited ballots"
+            }), 403
+        
+        return jsonify({"error": "Ballot not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/ballots', methods=['GET'])
+def api_list_published_ballots():
+    """API endpoint to list all published ballots with their publication status."""
+    try:
+        status_filter = request.args.get('status')  # Optional: 'CAST' or 'AUDITED'
+        ballots = ballot_publisher.list_published_ballots(status_filter)
+        
+        # Add summary statistics
+        stats = ballot_publisher.get_publication_stats()
+        
+        return jsonify({
+            "ballots": ballots,
+            "statistics": stats,
+            "filter_applied": status_filter
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/publish_ballot', methods=['POST'])
+def api_publish_existing_ballot():
+    """API endpoint to publish an already created encrypted ballot with specific status."""
+    try:
+        data = request.json
+        
+        ballot_id = data.get('ballot_id')
+        encrypted_ballot_response = data.get('encrypted_ballot_response')  
+        ballot_status = data.get('ballot_status', 'CAST').upper()
+        
+        if not all([ballot_id, encrypted_ballot_response]):
+            return jsonify({
+                "error": "Missing required fields", 
+                "required": ["ballot_id", "encrypted_ballot_response"],
+                "optional": ["ballot_status"]
+            }), 400
+        
+        if ballot_status not in ['CAST', 'AUDITED']:
+            ballot_status = 'CAST'  # Default to most secure
+        
+        result = ballot_publisher.publish_ballot(
+            ballot_id=ballot_id,
+            encrypted_ballot_response=encrypted_ballot_response,
+            ballot_status=ballot_status
+        )
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/create_encrypted_tally', methods=['POST'])
 def api_create_encrypted_tally():
