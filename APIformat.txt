@@ -6636,3 +6636,32 @@ End of benaloh_challenge_response
 ------------------
 
 
+
+---------------
+Data: benaloh_challenge_request
+party_names: list of (str)
+candidate_names: list of (str)
+candidate_name: str
+ballot_id: str
+joint_public_key: str
+commitment_hash: str
+number_of_guardians: int
+quorum: int
+encrypted_ballot_with_nonce: str
+End of benaloh_challenge_request
+------------------
+
+
+
+---------------
+Data: benaloh_challenge_response
+success: bool
+match: bool
+message: str
+ballot_id: str
+verified_candidate: str
+decrypted_votes: dict
+End of benaloh_challenge_response
+------------------
+
+
