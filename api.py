@@ -508,6 +508,9 @@ def api_create_encrypted_ballot():
             'ballot_hash': result['ballot_hash']
         }
         
+        # Keep a copy of the original encrypted ballot with nonces
+        encrypted_ballot_with_nonce = result['encrypted_ballot']
+        
         # Apply secure ballot publication based on ballot status
         try:
             publication_result = ballot_publisher.publish_ballot(
@@ -523,6 +526,7 @@ def api_create_encrypted_ballot():
                 'ballot_status': ballot_status,
                 'ballot_hash': publication_result['ballot_hash'],
                 'encrypted_ballot': publication_result['encrypted_ballot'],
+                'encrypted_ballot_with_nonce': encrypted_ballot_with_nonce,
                 'publication_status': publication_result['publication_status']
             }
             
@@ -540,6 +544,7 @@ def api_create_encrypted_ballot():
                 'status': 'success',
                 'encrypted_ballot': result['encrypted_ballot'],
                 'ballot_hash': result['ballot_hash'],
+                'encrypted_ballot_with_nonce': result['encrypted_ballot'],
                 'warning': 'Ballot published without sanitization due to error',
                 'sanitization_error': str(sanitization_error)
             }
