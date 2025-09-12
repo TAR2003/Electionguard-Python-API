@@ -1,8 +1,8 @@
 {
     "ballot_id": "ballot-2",
-    "expected_candidate": "Alice Johnson",
-    "match": false,
-    "message": "Ballot choice does NOT match expected candidate: Alice Johnson",
+    "expected_candidate": null,
+    "match": true,
+    "message": "Ballot choice matches expected candidate: Bob Smith",
     "status": "success",
-    "verified_candidate": null
+    "verified_candidate": "Bob Smith"
 }
