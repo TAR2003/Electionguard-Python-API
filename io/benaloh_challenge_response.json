@@ -1,0 +1,8 @@
+{
+    "ballot_id": "ballot-2",
+    "expected_candidate": "Alice Johnson",
+    "match": false,
+    "message": "Ballot choice does NOT match expected candidate: Alice Johnson",
+    "status": "success",
+    "verified_candidate": null
+}

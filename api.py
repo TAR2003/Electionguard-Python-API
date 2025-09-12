@@ -100,6 +100,7 @@ from services.combine_decryption_shares import combine_decryption_shares_service
 from services.create_partial_decryption_shares import compute_ballot_shares, compute_guardian_decryption_shares
 from services.create_encrypted_ballot import create_election_manifest, create_plaintext_ballot
 from services.create_encrypted_tally import ciphertext_tally_to_raw, raw_to_ciphertext_tally
+from services.benaloh_challenge import benaloh_challenge_service
 
 # Import ballot sanitization modules
 from ballot_sanitizer import prepare_ballot_for_publication, process_ballot_response
@@ -557,6 +558,70 @@ def api_create_encrypted_ballot():
         print_data(response, "./io/create_encrypted_ballot_response.json")
         print(f'finished encrypting ballot at the microservice - Status: {ballot_status}')
         return jsonify(response), 200
+    
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/benaloh_challenge', methods=['POST'])
+def api_benaloh_challenge():
+    """API endpoint to perform Benaloh challenge verification."""
+    try:
+        print('Benaloh challenge call at the microservice')
+        data = request.json
+        
+        # Validate required fields
+        required_fields = [
+            'encrypted_ballot_with_nonce', 'party_names', 'candidate_names',
+            'candidate_name', 'joint_public_key', 'commitment_hash',
+            'number_of_guardians', 'quorum'
+        ]
+        
+        validation_error = validate_input(data, required_fields)
+        if validation_error:
+            return jsonify({'status': 'error', 'message': validation_error}), 400
+        
+        encrypted_ballot_with_nonce = data['encrypted_ballot_with_nonce']
+        party_names = data['party_names']
+        candidate_names = data['candidate_names']
+        candidate_name = data['candidate_name']
+        joint_public_key = data['joint_public_key']
+        commitment_hash = data['commitment_hash']
+        number_of_guardians = safe_int_conversion(data['number_of_guardians'])
+        quorum = safe_int_conversion(data['quorum'])
+        
+        print_json(data, "benaloh_challenge_request")
+        
+        # Call the Benaloh challenge service
+        result = benaloh_challenge_service(
+            encrypted_ballot_with_nonce=encrypted_ballot_with_nonce,
+            party_names=party_names,
+            candidate_names=candidate_names,
+            candidate_name=candidate_name,
+            joint_public_key=joint_public_key,
+            commitment_hash=commitment_hash,
+            number_of_guardians=number_of_guardians,
+            quorum=quorum
+        )
+        
+        print_json(result, "benaloh_challenge_response")
+        print('Finished Benaloh challenge call at the microservice')
+        
+        if result['success']:
+            return jsonify({
+                'status': 'success',
+                'match': result['match'],
+                'message': result['message'],
+                'ballot_id': result.get('ballot_id'),
+                'verified_candidate': result.get('verified_candidate'),
+                'expected_candidate': result.get('expected_candidate')
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': result['error']
+            }), 400
     
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
