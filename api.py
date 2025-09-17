@@ -1330,4 +1330,4 @@ if __name__ == '__main__':
     print("IMPORTANT: Use proper WSGI server and SSL certificates in production!")
     print("Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)

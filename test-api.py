@@ -78,10 +78,10 @@ def test_quorum_election_workflow():
     # 1. Setup Guardians with quorum number first
     print("\n🔹 STEP 1: Setting up guardians with quorum support")
     setup_data = {
-        "number_of_guardians": 5,
-        "quorum": 3,  # Only 3 out of 5 guardians needed for decryption
-        "party_names": ["Democratic Party", "Republican Party"],
-        "candidate_names": ["Alice Johnson", "Bob Smith"]
+        "number_of_guardians": 3,
+        "quorum": 2,  # Only 2 out of 3 guardians needed for decryption
+        "party_names": ["Pollman", "let me take a selfie", "All Rounder", "BIg dan of Seniors"],
+        "candidate_names": ["SMT - Souvik Mondol Turjo", "Iffat Bin Hoassain", "Ishrak Adit", "Hasnaen Adil"]
     }
     
     setup_response = requests.post(f"{BASE_URL}/setup_guardians", json=setup_data)
@@ -104,10 +104,10 @@ def test_quorum_election_workflow():
     number_of_guardians = setup_result['number_of_guardians']
     quorum = setup_result['quorum']
 
-    # Print the guardian_data[4] element to guardian_data.json
+    # Print the guardian_data[2] element to guardian_data.json
     with open("guardian_data.json", "w") as f:
-        json.dump(json.loads(guardian_data[4]), f, indent=2)
-    print(f"✅ guardian_data[4] written to guardian_data.json")
+        json.dump(json.loads(guardian_data[2]), f, indent=2)
+    print(f"✅ guardian_data[2] written to guardian_data.json")
     
     print(f"✅ Guardian data prepared for {len(guardian_data)} guardians")
     print(f"✅ Private keys for {len(private_keys)} guardians")
@@ -121,7 +121,7 @@ def test_quorum_election_workflow():
     candidates = setup_data['candidate_names']
     ballot_data = []
     
-    for i in range(2):  # Create 3 ballots
+    for i in range(11):  # Create 11 ballots
         chosen_candidate = random.choice(candidates)
         ballot_request = {
             "party_names": setup_data['party_names'],
@@ -164,13 +164,13 @@ def test_quorum_election_workflow():
     
     print(f"✅ Tally created with {len(submitted_ballots)} ballots")
     
-    # 4. Demonstrate quorum decryption - only use 3 out of 5 guardians
-    print("\n🔹 STEP 4: Demonstrating quorum decryption (3 out of 5 guardians)")
+    # 4. Demonstrate quorum decryption - only use 2 out of 3 guardians
+    print("\n🔹 STEP 4: Demonstrating quorum decryption (2 out of 3 guardians)")
     
-    # For frontend, we work with guardian IDs as strings - first 3 are available, rest are missing
-    # Guardian IDs are "1", "2", "3", "4", "5" - we'll use first 3 as available
-    available_guardian_ids = ["1", "2", "3"]  # First 3 guardians are available
-    missing_guardian_ids = ["4", "5"]        # Last 2 guardians are missing
+    # For frontend, we work with guardian IDs as strings - first 2 are available, last 1 is missing
+    # Guardian IDs are "1", "2", "3" - we'll use first 2 as available
+    available_guardian_ids = ["1", "2"]  # First 2 guardians are available
+    missing_guardian_ids = ["3"]        # Last guardian is missing
     
     print(f"✅ Selected {len(available_guardian_ids)} available guardians:")
     for guardian_id in available_guardian_ids:

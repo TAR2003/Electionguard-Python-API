@@ -1,12 +1,16 @@
 {
-    "number_of_guardians": 5,
-    "quorum": 3,
+    "number_of_guardians": 3,
+    "quorum": 2,
     "party_names": [
-        "Democratic Party",
-        "Republican Party"
+        "Pollman",
+        "let me take a selfie",
+        "All Rounder",
+        "BIg dan of Seniors"
     ],
     "candidate_names": [
-        "Alice Johnson",
-        "Bob Smith"
+        "SMT - Souvik Mondol Turjo",
+        "Iffat Bin Hoassain",
+        "Ishrak Adit",
+        "Hasnaen Adil"
     ]
 }
