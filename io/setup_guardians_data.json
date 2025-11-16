@@ -1,16 +1,16 @@
 {
-    "number_of_guardians": 3,
-    "quorum": 2,
+    "number_of_guardians": 5,
+    "quorum": 3,
     "party_names": [
-        "Pollman",
-        "let me take a selfie",
-        "All Rounder",
-        "BIg dan of Seniors"
+        "Democratic Alliance",
+        "Progressive Coalition",
+        "Unity Party",
+        "Reform League"
     ],
     "candidate_names": [
-        "SMT - Souvik Mondol Turjo",
-        "Iffat Bin Hoassain",
-        "Ishrak Adit",
-        "Hasnaen Adil"
+        "Alice Johnson",
+        "Bob Smith",
+        "Carol Williams",
+        "David Brown"
     ]
 }
