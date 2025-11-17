@@ -1,0 +1,69 @@
+======================================================================================================================================================
+CHOICE-BASED BALLOT ENCRYPTION TEST RESULTS
+======================================================================================================================================================
+Test Date: 2025-11-18 01:45:22
+
+Configuration:
+  - Guardians: 5
+  - Quorum: 3
+  - Total Ballots: 500
+  - Choices (Candidates): 5
+  - Ballots per Choice: 100
+  - Guardian Setup Time: 0.2791s
+
+======================================================================================================================================================
+ENCRYPTION STATISTICS BY CHOICE
+======================================================================================================================================================
+Choice (Candidate)             Ballots    Avg Time        Min Time        Max Time        Std Dev         Avg Req Size    Avg Resp Size  
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Nobo                           100        0.1051         s 0.0770         s 1.1591         s 0.1384         s 1.84KB          98.98KB        
+Dipanta Nobo                   100        0.0882         s 0.0777         s 0.1244         s 0.0108         s 1.85KB          98.98KB        
+Dipanta Kumar Roy Nobo         100        0.1304         s 0.0773         s 3.2759         s 0.3430         s 1.86KB          98.98KB        
+Dipanta 2005074 Kumar 2005074 Roy Nobo 100        0.1057         s 0.0778         s 1.1184         s 0.1436         s 1.88KB          98.98KB        
+Prabhakarna Sripalawardhana Atapattu Jayasuriya Laxmansriramkrishna Shivavenkata Rajasekhara Shrinivasana Trichipalli Yekya Parampeel Parambatur Chinnaswami Muthuswami Venugopal Iyer Dipanta Kumar Roy Nobo 100        0.0956         s 0.0778         s 1.1282         s 0.1045         s 2.04KB          98.98KB        
+======================================================================================================================================================
+
+DETAILED BALLOT ASSIGNMENTS
+======================================================================================================================================================
+
+Choice: Nobo
+Ballot Count: 100
+Ballot IDs: ballot-1, ballot-96, ballot-86, ballot-4, ballot-27, ballot-90, ballot-79, ballot-75, ballot-82, ballot-65, ballot-81, ballot-33, ballot-18, ballot-47, ballot-23, ballot-76, ballot-9, ballot-59, ballot-84, ballot-51, ballot-83, ballot-46, ballot-70, ballot-21, ballot-29, ballot-40, ballot-95, ballot-61, ballot-12, ballot-31, ballot-44, ballot-97, ballot-69, ballot-42, ballot-16, ballot-39, ballot-41, ballot-10, ballot-60, ballot-94, ballot-71, ballot-36, ballot-85, ballot-55, ballot-58, ballot-56, ballot-77, ballot-72, ballot-49, ballot-45, ballot-74, ballot-34, ballot-52, ballot-64, ballot-14, ballot-57, ballot-19, ballot-63, ballot-80, ballot-66, ballot-28, ballot-35, ballot-7, ballot-32, ballot-11, ballot-13, ballot-24, ballot-62, ballot-37, ballot-26, ballot-3, ballot-8, ballot-78, ballot-43, ballot-2, ballot-88, ballot-38, ballot-67, ballot-54, ballot-73, ballot-20, ballot-91, ballot-99, ballot-87, ballot-15, ballot-5, ballot-98, ballot-50, ballot-22, ballot-6, ballot-100, ballot-30, ballot-17, ballot-68, ballot-25, ballot-93, ballot-48, ballot-92, ballot-53, ballot-89
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Choice: Dipanta Nobo
+Ballot Count: 100
+Ballot IDs: ballot-171, ballot-108, ballot-159, ballot-156, ballot-148, ballot-163, ballot-106, ballot-186, ballot-192, ballot-194, ballot-103, ballot-123, ballot-105, ballot-161, ballot-114, ballot-169, ballot-107, ballot-120, ballot-164, ballot-200, ballot-110, ballot-132, ballot-172, ballot-185, ballot-131, ballot-146, ballot-158, ballot-191, ballot-155, ballot-142, ballot-118, ballot-145, ballot-197, ballot-180, ballot-160, ballot-139, ballot-150, ballot-198, ballot-173, ballot-124, ballot-102, ballot-109, ballot-187, ballot-136, ballot-140, ballot-128, ballot-138, ballot-196, ballot-165, ballot-151, ballot-152, ballot-141, ballot-126, ballot-193, ballot-112, ballot-135, ballot-115, ballot-133, ballot-190, ballot-116, ballot-101, ballot-104, ballot-176, ballot-182, ballot-166, ballot-130, ballot-175, ballot-181, ballot-137, ballot-168, ballot-134, ballot-111, ballot-170, ballot-149, ballot-144, ballot-125, ballot-174, ballot-157, ballot-117, ballot-119, ballot-167, ballot-147, ballot-121, ballot-143, ballot-162, ballot-177, ballot-195, ballot-178, ballot-188, ballot-127, ballot-189, ballot-184, ballot-183, ballot-153, ballot-179, ballot-199, ballot-154, ballot-129, ballot-113, ballot-122
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Choice: Dipanta Kumar Roy Nobo
+Ballot Count: 100
+Ballot IDs: ballot-253, ballot-294, ballot-278, ballot-202, ballot-240, ballot-221, ballot-220, ballot-232, ballot-256, ballot-214, ballot-206, ballot-260, ballot-270, ballot-300, ballot-245, ballot-259, ballot-295, ballot-257, ballot-258, ballot-287, ballot-226, ballot-293, ballot-209, ballot-284, ballot-269, ballot-236, ballot-210, ballot-280, ballot-288, ballot-275, ballot-237, ballot-272, ballot-208, ballot-251, ballot-207, ballot-273, ballot-292, ballot-243, ballot-263, ballot-268, ballot-233, ballot-244, ballot-229, ballot-282, ballot-204, ballot-242, ballot-267, ballot-247, ballot-255, ballot-264, ballot-215, ballot-227, ballot-246, ballot-228, ballot-261, ballot-213, ballot-249, ballot-285, ballot-217, ballot-224, ballot-299, ballot-290, ballot-225, ballot-254, ballot-219, ballot-271, ballot-222, ballot-238, ballot-211, ballot-241, ballot-276, ballot-297, ballot-286, ballot-274, ballot-250, ballot-223, ballot-265, ballot-262, ballot-248, ballot-203, ballot-289, ballot-281, ballot-298, ballot-201, ballot-291, ballot-205, ballot-234, ballot-279, ballot-235, ballot-216, ballot-296, ballot-252, ballot-218, ballot-230, ballot-231, ballot-283, ballot-277, ballot-212, ballot-239, ballot-266
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Choice: Dipanta 2005074 Kumar 2005074 Roy Nobo
+Ballot Count: 100
+Ballot IDs: ballot-331, ballot-343, ballot-364, ballot-303, ballot-336, ballot-351, ballot-309, ballot-400, ballot-369, ballot-333, ballot-315, ballot-389, ballot-390, ballot-372, ballot-306, ballot-304, ballot-347, ballot-375, ballot-319, ballot-327, ballot-399, ballot-363, ballot-368, ballot-350, ballot-377, ballot-322, ballot-335, ballot-313, ballot-393, ballot-301, ballot-379, ballot-321, ballot-302, ballot-398, ballot-382, ballot-334, ballot-339, ballot-342, ballot-395, ballot-307, ballot-381, ballot-361, ballot-325, ballot-338, ballot-353, ballot-358, ballot-310, ballot-383, ballot-366, ballot-311, ballot-317, ballot-354, ballot-328, ballot-318, ballot-385, ballot-396, ballot-365, ballot-397, ballot-387, ballot-314, ballot-370, ballot-384, ballot-392, ballot-360, ballot-345, ballot-386, ballot-359, ballot-374, ballot-308, ballot-324, ballot-362, ballot-355, ballot-332, ballot-371, ballot-316, ballot-349, ballot-329, ballot-323, ballot-391, ballot-378, ballot-340, ballot-320, ballot-330, ballot-357, ballot-367, ballot-394, ballot-352, ballot-341, ballot-373, ballot-376, ballot-388, ballot-380, ballot-346, ballot-356, ballot-337, ballot-326, ballot-305, ballot-348, ballot-312, ballot-344
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Choice: Prabhakarna Sripalawardhana Atapattu Jayasuriya Laxmansriramkrishna Shivavenkata Rajasekhara Shrinivasana Trichipalli Yekya Parampeel Parambatur Chinnaswami Muthuswami Venugopal Iyer Dipanta Kumar Roy Nobo
+Ballot Count: 100
+Ballot IDs: ballot-430, ballot-478, ballot-476, ballot-417, ballot-421, ballot-466, ballot-434, ballot-486, ballot-435, ballot-460, ballot-475, ballot-490, ballot-491, ballot-455, ballot-471, ballot-470, ballot-401, ballot-413, ballot-468, ballot-407, ballot-416, ballot-498, ballot-464, ballot-500, ballot-483, ballot-458, ballot-461, ballot-493, ballot-422, ballot-410, ballot-406, ballot-467, ballot-449, ballot-418, ballot-456, ballot-412, ballot-445, ballot-494, ballot-474, ballot-415, ballot-440, ballot-402, ballot-479, ballot-472, ballot-427, ballot-489, ballot-497, ballot-484, ballot-441, ballot-409, ballot-442, ballot-477, ballot-423, ballot-420, ballot-419, ballot-448, ballot-452, ballot-481, ballot-451, ballot-408, ballot-495, ballot-426, ballot-403, ballot-465, ballot-444, ballot-431, ballot-429, ballot-454, ballot-439, ballot-453, ballot-438, ballot-488, ballot-428, ballot-499, ballot-425, ballot-443, ballot-485, ballot-496, ballot-424, ballot-414, ballot-482, ballot-405, ballot-433, ballot-437, ballot-411, ballot-432, ballot-473, ballot-404, ballot-492, ballot-447, ballot-436, ballot-480, ballot-457, ballot-459, ballot-450, ballot-446, ballot-462, ballot-487, ballot-469, ballot-463
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+======================================================================================================================================================
+OVERALL STATISTICS
+======================================================================================================================================================
+Total Ballots Encrypted: 500
+Total Encryption Time: 52.5005s
+Average Encryption Time per Ballot: 0.1050s
+Min Encryption Time: 0.0770s
+Max Encryption Time: 3.2759s
+Std Dev Encryption Time: 0.1834s
+
+Average Request Size per Ballot: 1.89KB
+Average Response Size per Ballot: 98.98KB
+Total Request Data: 946.28KB
+Total Response Data: 48.33MB
+
+======================================================================================================================================================
