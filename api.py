@@ -126,7 +126,7 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 AES_KEY_LENGTH = 32
 PASSWORD_LENGTH = 32  # Reduced for speed (still 256-bit entropy)
-MAX_PAYLOAD_SIZE = 1 * 1024 * 1024  # 1MB limit for memory efficiency
+MAX_PAYLOAD_SIZE = 20 * 1024 * 1024  # 20MB limit for memory efficiency
 
 # Master key - MUST be stored securely in production (HSM, Key Vault, etc.)
 MASTER_KEY = os.environ.get('MASTER_KEY_PQ')
@@ -1124,7 +1124,7 @@ def encrypt_it():
     try:
         # Input validation (optimized)
         private_key = data['private_key']
-        if not isinstance(private_key, str) or len(private_key) > 5000:
+        if not isinstance(private_key, str) or len(private_key) > 100000:
             return jsonify({'error': 'Invalid private key format or size'}), 400
 
         # Generate optimized password and salt
@@ -1330,4 +1330,4 @@ if __name__ == '__main__':
     print("IMPORTANT: Use proper WSGI server and SSL certificates in production!")
     print("Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)")
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)

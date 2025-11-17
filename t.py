@@ -14,7 +14,7 @@ BASE_URL = "http://localhost:5001"
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5
 QUORUM = 3
-NUMBER_OF_BALLOTS = 100
+NUMBER_OF_BALLOTS = 10000
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
