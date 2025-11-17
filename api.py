@@ -118,7 +118,7 @@ except ImportError:
 app = Flask(__name__)
 
 # Flask Configuration for handling large files and long requests
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max request size
+# No MAX_CONTENT_LENGTH limit - allows unlimited request sizes
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 app.config['JSON_SORT_KEYS'] = False  # Preserve JSON order for better performance
 
@@ -131,7 +131,6 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 AES_KEY_LENGTH = 32
 PASSWORD_LENGTH = 32  # Reduced for speed (still 256-bit entropy)
-MAX_PAYLOAD_SIZE = 500 * 1024 * 1024  # 500MB limit for large ballot files
 
 # Master key - MUST be stored securely in production (HSM, Key Vault, etc.)
 MASTER_KEY = os.environ.get('MASTER_KEY_PQ')
@@ -336,10 +335,6 @@ def validate_input(data, required_fields):
     for field in required_fields:
         if field not in data:
             return f"Missing required field: {field}"
-    
-    # Check payload size
-    if len(json.dumps(data)) > MAX_PAYLOAD_SIZE:
-        return "Payload too large"
     
     return None
 
@@ -1335,7 +1330,7 @@ if __name__ == '__main__':
     print("Starting development server with enhanced security and 2-storage design...")
     print("IMPORTANT: Use proper WSGI server and SSL certificates in production!")
     print("Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)")
-    print("Configuration: Max payload 500MB, Threaded mode enabled, No request timeout")
+    print("Configuration: Unlimited payload size, Threaded mode enabled, No request timeout")
     
     # Run with threaded=True to handle concurrent requests and prevent blocking
     # debug=False to prevent timeout issues with large operations
