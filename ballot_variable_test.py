@@ -18,7 +18,7 @@ BASE_URL = "http://192.168.30.138:5000"
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5
 QUORUM = 3
-BALLOT_COUNTS = [ 1024, 2048]  # Array of ballot counts to test
+BALLOT_COUNTS = [32, 64, 128, 256, 512, 1024, 2048]  # Array of ballot counts to test
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
@@ -184,9 +184,9 @@ def export_results_to_file(ballot_count, stats, previous_ballot_count=None, prev
     filename = "election_performance_results.txt"
     
     with open(filename, 'a', encoding='utf-8') as f:
-        f.write("\n" + "=" * 150 + "\n")
+        f.write("\n" + "=" * 200 + "\n")
         f.write(f"ELECTION WORKFLOW PERFORMANCE TEST - {ballot_count} BALLOTS\n")
-        f.write("=" * 150 + "\n")
+        f.write("=" * 200 + "\n")
         f.write(f"Configuration:\n")
         f.write(f"  - Guardians: {NUMBER_OF_GUARDIANS}\n")
         f.write(f"  - Quorum: {QUORUM}\n")
@@ -198,15 +198,15 @@ def export_results_to_file(ballot_count, stats, previous_ballot_count=None, prev
             ratio = ballot_count / previous_ballot_count
             f.write(f"  - Comparative to previous: {ratio:.4f}x ({previous_ballot_count} ballots)\n")
         
-        f.write("\n" + "-" * 150 + "\n")
+        f.write("\n" + "-" * 200 + "\n")
         f.write("API PERFORMANCE SUMMARY\n")
-        f.write("-" * 150 + "\n")
+        f.write("-" * 200 + "\n")
         f.write(f"{'API Endpoint':<40} {'Calls':<8} {'Avg Time':<12} {'Min Time':<12} {'Max Time':<12} {'Std Dev':<12} {'Avg Req':<12} {'Avg Resp':<12}")
         
         if previous_stats:
-            f.write(f" {'Ratio':<10}")
+            f.write(f" {'Time Ratio':<12} {'Req Ratio':<12} {'Resp Ratio':<12}")
         
-        f.write("\n" + "-" * 150 + "\n")
+        f.write("\n" + "-" * 200 + "\n")
         
         for api_name in sorted([k for k in stats.keys() if k != 'TOTAL']):
             s = stats[api_name]
@@ -215,24 +215,31 @@ def export_results_to_file(ballot_count, stats, previous_ballot_count=None, prev
             f.write(f"{api_name:<40} {s['calls']:<8} {s['avg_time']:<12.4f}s {s['min_time']:<12.4f}s {s['max_time']:<12.4f}s {s['std_dev']:<12.4f}s {avg_req_str:<12} {avg_resp_str:<12}")
             
             if previous_stats and api_name in previous_stats:
-                prev_avg = previous_stats[api_name]['avg_time']
-                ratio = s['avg_time'] / prev_avg if prev_avg > 0 else 0
-                f.write(f" {ratio:<10.4f}")
+                prev_avg_time = previous_stats[api_name]['avg_time']
+                time_ratio = s['avg_time'] / prev_avg_time if prev_avg_time > 0 else 0
+                
+                prev_avg_req = previous_stats[api_name]['avg_req_size']
+                req_ratio = s['avg_req_size'] / prev_avg_req if prev_avg_req > 0 else 0
+                
+                prev_avg_resp = previous_stats[api_name]['avg_resp_size']
+                resp_ratio = s['avg_resp_size'] / prev_avg_resp if prev_avg_resp > 0 else 0
+                
+                f.write(f" {time_ratio:<12.4f} {req_ratio:<12.4f} {resp_ratio:<12.4f}")
             elif previous_stats:
-                f.write(f" {'N/A':<10}")
+                f.write(f" {'N/A':<12} {'N/A':<12} {'N/A':<12}")
             
             f.write("\n")
         
-        f.write("-" * 150 + "\n")
+        f.write("-" * 200 + "\n")
         f.write(f"{'TOTAL':<40} {stats['TOTAL']['total_calls']:<8} {stats['TOTAL']['total_time']:<12.4f}s")
         
         if previous_stats and 'TOTAL' in previous_stats:
             prev_total = previous_stats['TOTAL']['total_time']
             ratio = stats['TOTAL']['total_time'] / prev_total if prev_total > 0 else 0
-            f.write(f"{'':<62} {ratio:<10.4f}")
+            f.write(f"{'':<62} {ratio:<12.4f}")
         
         f.write("\n")
-        f.write("=" * 150 + "\n\n")
+        f.write("=" * 200 + "\n\n")
     
     print(f"\n📄 Results exported to {filename}")
 
