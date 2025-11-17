@@ -9,12 +9,11 @@ from collections import defaultdict
 from statistics import mean, stdev
 
 # API Base URL
-BASE_URL = "http://localhost:5001"
-
+BASE_URL = "http://192.168.30.138:5000"
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5
 QUORUM = 3
-NUMBER_OF_BALLOTS = 10000
+NUMBER_OF_BALLOTS = 128
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 

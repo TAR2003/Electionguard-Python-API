@@ -13,29 +13,49 @@ import urllib3  # ← ADD THIS
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # ← ADD THIS
 
 # API Base URL
-BASE_URL = "http://192.168.30.138/eg"
+BASE_URL = "http://192.168.30.138:5000"
 
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5
 QUORUM = 3
-BALLOT_COUNTS = [64, 128, 256, 512, 1024, 2048]  # Array of ballot counts to test
+BALLOT_COUNTS = [ 1024, 2048]  # Array of ballot counts to test
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
 # Timing tracker
 timing_data = defaultdict(list)
+# Size tracker (request and response sizes)
+size_data = defaultdict(lambda: {'request_sizes': [], 'response_sizes': []})
 # Store results for each ballot count
 all_results = {}
 
 
+def format_size(size_bytes: int) -> str:
+    """Format size in bytes to human-readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f}{unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f}TB"
+
+
 def time_api_call(api_name: str, url: str, json_data: dict) -> Tuple[dict, float]:
-    """Make an API call and record the response time."""
+    """Make an API call and record the response time and sizes."""
+    # Calculate request size
+    request_json = json.dumps(json_data)
+    request_size = len(request_json.encode('utf-8'))
+    
     start_time = time.time()
-    response = requests.post(url, json=json_data, verify=False, timeout=300)  # ← ADD verify=False AND timeout
+    response = requests.post(url, json=json_data, verify=False, timeout=None)  # ← ADD verify=False AND timeout
     end_time = time.time()
+    
+    # Calculate response size
+    response_size = len(response.content)
     
     elapsed_time = end_time - start_time
     timing_data[api_name].append(elapsed_time)
+    size_data[api_name]['request_sizes'].append(request_size)
+    size_data[api_name]['response_sizes'].append(response_size)
     
     assert response.status_code == 200, f"{api_name} failed: {response.text}"
     return response.json(), elapsed_time
@@ -86,11 +106,11 @@ def find_guardian_data(guardian_id: str, guardian_data_list: List[str],
 
 def print_timing_summary():
     """Print a formatted summary of all API timing data."""
-    print("\n" + "=" * 100)
+    print("\n" + "=" * 150)
     print("API PERFORMANCE SUMMARY")
-    print("=" * 100)
-    print(f"{'API Endpoint':<40} {'Calls':<10} {'Avg Time':<15} {'Min Time':<15} {'Max Time':<15} {'Std Dev':<15}")
-    print("-" * 100)
+    print("=" * 150)
+    print(f"{'API Endpoint':<40} {'Calls':<8} {'Avg Time':<12} {'Min Time':<12} {'Max Time':<12} {'Std Dev':<12} {'Avg Req':<12} {'Avg Resp':<12}")
+    print("-" * 150)
     
     total_time = 0
     total_calls = 0
@@ -103,14 +123,20 @@ def print_timing_summary():
         max_time = max(times)
         std_dev = stdev(times) if len(times) > 1 else 0.0
         
+        # Calculate average sizes
+        req_sizes = size_data[api_name]['request_sizes']
+        resp_sizes = size_data[api_name]['response_sizes']
+        avg_req_size = format_size(mean(req_sizes)) if req_sizes else 'N/A'
+        avg_resp_size = format_size(mean(resp_sizes)) if resp_sizes else 'N/A'
+        
         total_time += sum(times)
         total_calls += num_calls
         
-        print(f"{api_name:<40} {num_calls:<10} {avg_time:<15.4f}s {min_time:<15.4f}s {max_time:<15.4f}s {std_dev:<15.4f}s")
+        print(f"{api_name:<40} {num_calls:<8} {avg_time:<12.4f}s {min_time:<12.4f}s {max_time:<12.4f}s {std_dev:<12.4f}s {avg_req_size:<12} {avg_resp_size:<12}")
     
-    print("-" * 100)
-    print(f"{'TOTAL':<40} {total_calls:<10} {total_time:<15.4f}s")
-    print("=" * 100)
+    print("-" * 150)
+    print(f"{'TOTAL':<40} {total_calls:<8} {total_time:<12.4f}s")
+    print("=" * 150)
 
 
 def get_timing_stats():
@@ -126,13 +152,21 @@ def get_timing_stats():
         max_time = max(times)
         std_dev = stdev(times) if len(times) > 1 else 0.0
         
+        # Calculate average sizes
+        req_sizes = size_data[api_name]['request_sizes']
+        resp_sizes = size_data[api_name]['response_sizes']
+        avg_req_size = mean(req_sizes) if req_sizes else 0
+        avg_resp_size = mean(resp_sizes) if resp_sizes else 0
+        
         stats[api_name] = {
             'calls': num_calls,
             'avg_time': avg_time,
             'min_time': min_time,
             'max_time': max_time,
             'std_dev': std_dev,
-            'total_time': sum(times)
+            'total_time': sum(times),
+            'avg_req_size': avg_req_size,
+            'avg_resp_size': avg_resp_size
         }
         
         total_time += sum(times)
@@ -150,9 +184,9 @@ def export_results_to_file(ballot_count, stats, previous_ballot_count=None, prev
     filename = "election_performance_results.txt"
     
     with open(filename, 'a', encoding='utf-8') as f:
-        f.write("\n" + "=" * 120 + "\n")
+        f.write("\n" + "=" * 150 + "\n")
         f.write(f"ELECTION WORKFLOW PERFORMANCE TEST - {ballot_count} BALLOTS\n")
-        f.write("=" * 120 + "\n")
+        f.write("=" * 150 + "\n")
         f.write(f"Configuration:\n")
         f.write(f"  - Guardians: {NUMBER_OF_GUARDIANS}\n")
         f.write(f"  - Quorum: {QUORUM}\n")
@@ -164,39 +198,41 @@ def export_results_to_file(ballot_count, stats, previous_ballot_count=None, prev
             ratio = ballot_count / previous_ballot_count
             f.write(f"  - Comparative to previous: {ratio:.4f}x ({previous_ballot_count} ballots)\n")
         
-        f.write("\n" + "-" * 120 + "\n")
+        f.write("\n" + "-" * 150 + "\n")
         f.write("API PERFORMANCE SUMMARY\n")
-        f.write("-" * 120 + "\n")
-        f.write(f"{'API Endpoint':<40} {'Calls':<10} {'Avg Time':<15} {'Min Time':<15} {'Max Time':<15} {'Std Dev':<15}")
+        f.write("-" * 150 + "\n")
+        f.write(f"{'API Endpoint':<40} {'Calls':<8} {'Avg Time':<12} {'Min Time':<12} {'Max Time':<12} {'Std Dev':<12} {'Avg Req':<12} {'Avg Resp':<12}")
         
         if previous_stats:
-            f.write(f" {'Ratio vs Prev':<15}")
+            f.write(f" {'Ratio':<10}")
         
-        f.write("\n" + "-" * 120 + "\n")
+        f.write("\n" + "-" * 150 + "\n")
         
         for api_name in sorted([k for k in stats.keys() if k != 'TOTAL']):
             s = stats[api_name]
-            f.write(f"{api_name:<40} {s['calls']:<10} {s['avg_time']:<15.4f}s {s['min_time']:<15.4f}s {s['max_time']:<15.4f}s {s['std_dev']:<15.4f}s")
+            avg_req_str = format_size(s['avg_req_size'])
+            avg_resp_str = format_size(s['avg_resp_size'])
+            f.write(f"{api_name:<40} {s['calls']:<8} {s['avg_time']:<12.4f}s {s['min_time']:<12.4f}s {s['max_time']:<12.4f}s {s['std_dev']:<12.4f}s {avg_req_str:<12} {avg_resp_str:<12}")
             
             if previous_stats and api_name in previous_stats:
                 prev_avg = previous_stats[api_name]['avg_time']
                 ratio = s['avg_time'] / prev_avg if prev_avg > 0 else 0
-                f.write(f" {ratio:<15.4f}")
+                f.write(f" {ratio:<10.4f}")
             elif previous_stats:
-                f.write(f" {'N/A':<15}")
+                f.write(f" {'N/A':<10}")
             
             f.write("\n")
         
-        f.write("-" * 120 + "\n")
-        f.write(f"{'TOTAL':<40} {stats['TOTAL']['total_calls']:<10} {stats['TOTAL']['total_time']:<15.4f}s")
+        f.write("-" * 150 + "\n")
+        f.write(f"{'TOTAL':<40} {stats['TOTAL']['total_calls']:<8} {stats['TOTAL']['total_time']:<12.4f}s")
         
         if previous_stats and 'TOTAL' in previous_stats:
             prev_total = previous_stats['TOTAL']['total_time']
             ratio = stats['TOTAL']['total_time'] / prev_total if prev_total > 0 else 0
-            f.write(f"{'':<46} {ratio:<15.4f}")
+            f.write(f"{'':<62} {ratio:<10.4f}")
         
         f.write("\n")
-        f.write("=" * 120 + "\n\n")
+        f.write("=" * 150 + "\n\n")
     
     print(f"\n📄 Results exported to {filename}")
 
@@ -497,8 +533,9 @@ def main():
             print(f"🔶 TESTING WITH {ballot_count} BALLOTS")
             print("🔶" * 50 + "\n")
             
-            # Clear timing data for this run
+            # Clear timing and size data for this run
             timing_data.clear()
+            size_data.clear()
             
             # Run the complete workflow
             results = run_election_workflow_with_timing(ballot_count)

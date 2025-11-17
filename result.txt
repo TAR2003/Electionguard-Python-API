@@ -1,0 +1,132 @@
+Election API Performance Test Results
+====================================================================================================
+
+
+====================================================================================================
+🚀 STARTING TEST WITH 64 BALLOTS
+====================================================================================================
+
+====================================================================================================
+ELECTION WORKFLOW PERFORMANCE TEST
+====================================================================================================
+Configuration:
+  - Guardians: 5
+  - Quorum: 3
+  - Ballots: 64
+  - Parties: 4
+  - Candidates: 4
+====================================================================================================
+
+🔹 STEP 1: Setting up guardians...
+✅ Guardian setup completed in 0.2728s
+
+🔹 STEP 2: Creating 64 encrypted ballots...
+  ✓ Encrypted 20/64 ballots...
+  ✓ Encrypted 40/64 ballots...
+  ✓ Encrypted 60/64 ballots...
+✅ All 64 ballots encrypted
+
+🔹 STEP 3: Tallying encrypted ballots...
+✅ Tally created in 14.0078s
+
+🔹 STEP 4: Selecting 3 out of 5 guardians for quorum decryption...
+  ✓ Available guardians: 1, 2, 3
+  ✓ Missing guardians: 4, 5
+
+🔹 STEP 5: Computing decryption shares for 3 available guardians...
+  ✓ Guardian 1 computed shares in 6.3685s
+  ✓ Guardian 2 computed shares in 6.6297s
+  ✓ Guardian 3 computed shares in 6.3862s
+
+🔹 STEP 6: Computing compensated shares for 2 missing guardians...
+  ✓ Guardian 1 compensated for 4 in 8.4300s
+  ✓ Guardian 2 compensated for 4 in 6.5168s
+  ✓ Guardian 3 compensated for 4 in 6.3983s
+  ✓ Guardian 1 compensated for 5 in 6.3601s
+  ✓ Guardian 2 compensated for 5 in 8.5903s
+  ✓ Guardian 3 compensated for 5 in 6.8112s
+✅ Completed 6 compensated decryptions
+
+🔹 STEP 7: Combining all decryption shares...
+✅ Combined shares in 28.8526s
+
+🔹 STEP 8: Final Election Results
+================================================================================
+Election: Test Election
+Guardians: 5 total, 3 quorum
+Total ballots cast: 64
+Valid ballots: 64
+Spoiled ballots: 0
+
+📊 Vote Counts:
+  Alice Johnson: 14 votes (21.88%)
+  Bob Smith: 14 votes (21.88%)
+  Carol Williams: 22 votes (34.38%)
+  David Brown: 14 votes (21.88%)
+
+✅ ELECTION WORKFLOW COMPLETED SUCCESSFULLY!
+
+====================================================================================================
+API PERFORMANCE SUMMARY
+====================================================================================================
+API Endpoint                             Calls      Avg Time        Min Time        Max Time        Std Dev        
+----------------------------------------------------------------------------------------------------
+combine_decryption_shares                1          28.8526        s 28.8526        s 28.8526        s 0.0000         s
+create_compensated_decryption            6          7.1844         s 6.3601         s 8.5903         s 1.0402         s
+create_encrypted_ballot                  64         0.0852         s 0.0734         s 0.1367         s 0.0142         s
+create_encrypted_tally                   1          14.0078        s 14.0078        s 14.0078        s 0.0000         s
+create_partial_decryption                3          6.4615         s 6.3685         s 6.6297         s 0.1460         s
+setup_guardians                          1          0.2728         s 0.2728         s 0.2728         s 0.0000         s
+----------------------------------------------------------------------------------------------------
+TOTAL                                    76         111.0776       s
+====================================================================================================
+
+====================================================================================================
+🎉 TEST WITH 64 BALLOTS COMPLETED SUCCESSFULLY!
+====================================================================================================
+
+
+====================================================================================================
+🚀 STARTING TEST WITH 128 BALLOTS
+====================================================================================================
+
+====================================================================================================
+ELECTION WORKFLOW PERFORMANCE TEST
+====================================================================================================
+Configuration:
+  - Guardians: 5
+  - Quorum: 3
+  - Ballots: 128
+  - Parties: 4
+  - Candidates: 4
+====================================================================================================
+
+🔹 STEP 1: Setting up guardians...
+✅ Guardian setup completed in 0.2827s
+
+🔹 STEP 2: Creating 128 encrypted ballots...
+  ✓ Encrypted 20/128 ballots...
+  ✓ Encrypted 40/128 ballots...
+  ✓ Encrypted 60/128 ballots...
+  ✓ Encrypted 80/128 ballots...
+  ✓ Encrypted 100/128 ballots...
+  ✓ Encrypted 120/128 ballots...
+✅ All 128 ballots encrypted
+
+🔹 STEP 3: Tallying encrypted ballots...
+✅ Tally created in 26.1367s
+
+🔹 STEP 4: Selecting 3 out of 5 guardians for quorum decryption...
+  ✓ Available guardians: 1, 2, 3
+  ✓ Missing guardians: 4, 5
+
+🔹 STEP 5: Computing decryption shares for 3 available guardians...
+  ✓ Guardian 1 computed shares in 13.1432s
+  ✓ Guardian 2 computed shares in 15.0908s
+  ✓ Guardian 3 computed shares in 13.2077s
+
+🔹 STEP 6: Computing compensated shares for 2 missing guardians...
+  ✓ Guardian 1 compensated for 4 in 14.7963s
+  ✓ Guardian 2 compensated for 4 in 12.8289s
+  ✓ Guardian 3 compensated for 4 in 13.0279s
+  ✓ Guardian 1 compensated for 5 in 15.2589s

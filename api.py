@@ -117,6 +117,11 @@ except ImportError:
 
 app = Flask(__name__)
 
+# Flask Configuration for handling large files and long requests
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max request size
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
+app.config['JSON_SORT_KEYS'] = False  # Preserve JSON order for better performance
+
 # Security Configuration
 PQ_ALGORITHM = "ML-KEM-1024"  # Official NIST name
 SCRYPT_SALT_LENGTH = 32
@@ -126,7 +131,7 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 AES_KEY_LENGTH = 32
 PASSWORD_LENGTH = 32  # Reduced for speed (still 256-bit entropy)
-MAX_PAYLOAD_SIZE = 20 * 1024 * 1024  # 20MB limit for memory efficiency
+MAX_PAYLOAD_SIZE = 500 * 1024 * 1024  # 500MB limit for large ballot files
 
 # Master key - MUST be stored securely in production (HSM, Key Vault, etc.)
 MASTER_KEY = os.environ.get('MASTER_KEY_PQ')
@@ -162,8 +167,9 @@ def print_json(data, str_):
         print(f"End of {str_}\n------------------\n\n", file=f)
 
 def print_data(data, filename):
-    with open(filename, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    pass
+    # with open(filename, "w") as f:
+    #     json.dump(data, f, ensure_ascii=False, indent=4)
 
 
 # Helper functions for serialization/deserialization
@@ -1329,5 +1335,8 @@ if __name__ == '__main__':
     print("Starting development server with enhanced security and 2-storage design...")
     print("IMPORTANT: Use proper WSGI server and SSL certificates in production!")
     print("Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)")
+    print("Configuration: Max payload 500MB, Threaded mode enabled, No request timeout")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Run with threaded=True to handle concurrent requests and prevent blocking
+    # debug=False to prevent timeout issues with large operations
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
