@@ -44,6 +44,11 @@ LOAD_SCENARIOS = [
     (50, 10),     # Stress Test: 50 concurrent users, 10 requests each (500 total)
     (100, 10),    # High Stress: 100 concurrent users, 10 requests each (1000 total)
     (200, 10),    # Extreme Load: 200 concurrent users, 10 requests each (2000 total)
+    (500, 10),    # Maximum Load: 500 concurrent users, 10 requests each (5000 total)
+    (1000, 10),    # Peak Load: 1000 concurrent users, 10 requests each (10000 total)
+    (2000, 10),    # Ultimate Load: 2000 concurrent users, 10 requests each (20000 total)
+    (5000, 10)     # Epic Load: 5000 concurrent users, 10 requests each (50000 total)
+    
 ]
 
 # Election Configuration (matches test-api.py setup)

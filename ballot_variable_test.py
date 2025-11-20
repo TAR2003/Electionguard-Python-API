@@ -18,7 +18,7 @@ BASE_URL = "http://192.168.30.138:5000"
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5
 QUORUM = 3
-BALLOT_COUNTS = [32, 64, 128, 256, 512, 1024, 2048]  # Array of ballot counts to test
+BALLOT_COUNTS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]  # Array of ballot counts to test
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
