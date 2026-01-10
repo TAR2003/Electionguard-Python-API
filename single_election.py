@@ -12,7 +12,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # =========================================================
 # CONFIG
 # =========================================================
-BASE_URL = "http://192.168.30.136:5001"
+BASE_URL = "http://192.168.30.136:5000"
 
 NUMBER_OF_GUARDIANS = 3
 QUORUM = 2
@@ -33,13 +33,29 @@ def log(msg, indent=0):
 def time_api_call(api_name, url, payload, indent=0):
     log(f"[API START] {api_name}", indent)
     start = time.time()
-    response = requests.post(url, json=payload, verify=False, timeout=None)
-    elapsed = time.time() - start
+    session = requests.Session()
+    headers = {"Connection": "close"}
+    response = None
+    try:
+        response = session.post(url, json=payload, verify=False, timeout=None, headers=headers)
+        elapsed = time.time() - start
 
-    assert response.status_code == 200, f"{api_name} failed: {response.text}"
-    log(f"[API END] {api_name} ({elapsed:.3f}s)", indent)
+        assert response.status_code == 200, f"{api_name} failed: {response.text}"
+        log(f"[API END] {api_name} ({elapsed:.3f}s)", indent)
 
-    return response.json(), elapsed
+        data = response.json()
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+        try:
+            session.close()
+        except Exception:
+            pass
+
+    return data, elapsed
 
 
 def chunk_list(data, size):
