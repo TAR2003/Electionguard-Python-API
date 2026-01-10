@@ -2,19 +2,16 @@
 FROM python:3.12
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=api.py
 ENV FLASK_ENV=production
-ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=5000
-ENV GUNICORN_TIMEOUT=120
-ENV GUNICORN_WORKERS=4
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create and set working directory
@@ -33,8 +30,26 @@ COPY . .
 EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s \
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
-# Run the application with Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "120", "--workers", "4", "api:app"]
+# Run with optimized settings to prevent deadlock
+# Key changes:
+# - worker-class sync (no threading with multiprocessing)
+# - workers 2 (reduced to minimize memory)
+# - max-requests 100 (recycle workers to prevent memory accumulation)
+# - timeout 300 (5 minutes for crypto operations)
+# - worker-tmp-dir /dev/shm (use shared memory to avoid disk I/O issues)
+CMD ["gunicorn", \
+    "--bind", "0.0.0.0:5000", \
+    "--workers", "2", \
+    "--worker-class", "sync", \
+    "--threads", "1", \
+    "--max-requests", "100", \
+    "--max-requests-jitter", "20", \
+    "--timeout", "300", \
+    "--worker-tmp-dir", "/dev/shm", \
+    "--graceful-timeout", "30", \
+    "--keep-alive", "5", \
+    "--log-level", "info", \
+    "api:app"]

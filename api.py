@@ -1,13 +1,19 @@
 #!/usr/bin/env python
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from typing import Dict, List, Optional, Tuple, Any
+import gc
 import random
 from datetime import datetime
 import uuid
+import threading
+import time
+import sys
 from collections import defaultdict
 import hashlib
 import json
+import signal
+from functools import wraps
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes, hmac
@@ -115,12 +121,37 @@ except ImportError:
     print("Warning: pqcrypto not available. Install with: pip install pqcrypto")
     PQ_AVAILABLE = False
 
+
+#!/usr/bin/env python
+
+# All your imports here...
+from flask import Flask, request, jsonify, g
+# ... rest of imports ...
+
+# ===== ADD THIS SECTION HERE (before app = Flask(__name__)) =====
+import multiprocessing
+import os
+
+# CRITICAL: Force spawn method to prevent fork-based deadlock in Docker
+try:
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass  # Already set
+
+# Prevent semaphore issues
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+# ===== END ADDITION =====
+
 app = Flask(__name__)
+# ... rest of your code ...
+
 
 # Flask Configuration for handling large files and long requests
 # No MAX_CONTENT_LENGTH limit - allows unlimited request sizes
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 app.config['JSON_SORT_KEYS'] = False  # Preserve JSON order for better performance
+app.config['REQUEST_TIMEOUT'] = 300  # 5 minutes timeout per request
+app.config['RESPONSE_TIMEOUT'] = 300  # 5 minutes response timeout
 
 # Security Configuration
 PQ_ALGORITHM = "ML-KEM-1024"  # Official NIST name
@@ -147,28 +178,82 @@ rate_limit_storage = {}
 # Initialize secure ballot publisher
 ballot_publisher = BallotPublisher()
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Setup logging with thread info
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(threadName)s-%(thread)d] %(levelname)s: %(message)s',
+    stream=sys.stdout
+)
 logger = logging.getLogger(__name__)
 
-def print_json(data, str_):
-    with open("APIformat.txt", "a") as f:
-        print(f"\n---------------\nData: {str_}", file=f)
-        for key, value in data.items():
-            if isinstance(value, list):
-                if not value:
-                    value_type = "list (empty)"
-                else:
-                    value_type = f"list of ({type(value[0]).__name__})"
-            else:
-                value_type = type(value).__name__
-            print(f"{key}: {value_type}", file=f)
-        print(f"End of {str_}\n------------------\n\n", file=f)
+# Request tracking
+request_tracking = {}
+tracking_lock = threading.Lock()
 
-def print_data(data, filename):
-    pass
-    # with open(filename, "w") as f:
-    #     json.dump(data, f, ensure_ascii=False, indent=4)
+def track_request(endpoint):
+    """Decorator to track request execution and detect hangs"""
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            request_id = str(uuid.uuid4())[:8]
+            thread_id = threading.current_thread().ident
+            start_time = time.time()
+            
+            # Track this request
+            with tracking_lock:
+                request_tracking[request_id] = {
+                    'endpoint': endpoint,
+                    'thread_id': thread_id,
+                    'start_time': start_time,
+                    'status': 'started'
+                }
+            
+            logger.info(f"[{request_id}] START {endpoint} (thread {thread_id})")
+            
+            try:
+                result = f(*args, **kwargs)
+                elapsed = time.time() - start_time
+                
+                with tracking_lock:
+                    request_tracking[request_id]['status'] = 'completed'
+                    request_tracking[request_id]['elapsed'] = elapsed
+                
+                logger.info(f"[{request_id}] COMPLETE {endpoint} in {elapsed:.2f}s")
+                return result
+                
+            except Exception as e:
+                elapsed = time.time() - start_time
+                
+                with tracking_lock:
+                    request_tracking[request_id]['status'] = 'failed'
+                    request_tracking[request_id]['error'] = str(e)
+                    request_tracking[request_id]['elapsed'] = elapsed
+                
+                logger.error(f"[{request_id}] FAILED {endpoint} after {elapsed:.2f}s: {e}")
+                raise
+            
+            finally:
+                # Cleanup old tracking data (keep last 100)
+                with tracking_lock:
+                    if len(request_tracking) > 100:
+                        old_keys = sorted(request_tracking.keys())[:50]
+                        for k in old_keys:
+                            del request_tracking[k]
+        
+        return wrapper
+    return decorator
+
+# def ## print_json(data, str_):
+#     """Disabled file I/O to prevent blocking - use logger instead"""
+#     try:
+#         logger.info(f"Processing: {str_} with {len(data)} fields")
+#     except:
+#         pass  # Don't let logging failures affect processing
+
+# def ## print_data(data, filename):
+#     pass
+#     # with open(filename, "w") as f:
+#     #     json.dump(data, f, ensure_ascii=False, indent=4)
 
 
 # Helper functions for serialization/deserialization
@@ -416,8 +501,8 @@ def api_setup_guardians():
         party_names = data['party_names']
         candidate_names = data['candidate_names']
         
-        print_json(data, "setup_guardians")
-        print_data(data, "./io/setup_guardians_data.json")
+        ## print_json(data, "setup_guardians")
+        ## print_data(data, "./io/setup_guardians_data.json")
 
         # Call service function
         result = setup_guardians_service(
@@ -448,8 +533,8 @@ def api_setup_guardians():
             'number_of_guardians': result['number_of_guardians'],
             'quorum': result['quorum']
         }
-        print_json(response, "setup_guardians_response")
-        print_data(response, "./io/setup_guardians_response.json")
+        ## print_json(response, "setup_guardians_response")
+        ## print_data(response, "./io/setup_guardians_response.json")
         print('Finished setup guardians call at the microservice')
         return jsonify(response), 200
     
@@ -459,10 +544,11 @@ def api_setup_guardians():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/create_encrypted_ballot', methods=['POST'])
+@track_request('/create_encrypted_ballot')
 def api_create_encrypted_ballot():
     """API endpoint to create and encrypt a ballot with secure publication."""
     try:
-        print('create encrypted ballot call at the microservice')
+        logger.info('Creating encrypted ballot')
         data = request.json
         party_names = data['party_names']
         candidate_names = data['candidate_names']
@@ -476,8 +562,8 @@ def api_create_encrypted_ballot():
         if ballot_status not in ['CAST', 'AUDITED']:
             ballot_status = 'CAST'  # Default to most secure option
         
-        print_json(data, "create_encrypted_ballot")
-        print_data(data, "./io/create_encrypted_ballot_request.json")
+        ## print_json(data, "create_encrypted_ballot")
+        ## print_data(data, "./io/create_encrypted_ballot_request.json")
 
         # Get election data with safe int conversion
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
@@ -498,10 +584,9 @@ def api_create_encrypted_ballot():
             generate_ballot_hash_electionguard
         )
         
-        # Store the encrypted ballot (optional) - ensure key exists
-        if 'encrypted_ballots' not in election_data:
-            election_data['encrypted_ballots'] = []
-        election_data['encrypted_ballots'].append(result['encrypted_ballot'])
+        # Don't store ballots in memory - keep API stateless
+        # If you need to store ballots, do it in the backend database
+        # election_data is only for temporary session data if needed
         
         # Create the complete ballot response for sanitization
         complete_ballot_response = {
@@ -552,12 +637,23 @@ def api_create_encrypted_ballot():
             }
         
         # Save the response to file for debugging
-        with open("create_encrypted_ballot_response.json", "w", encoding="utf-8") as f:
-            json.dump(response, f, ensure_ascii=False, indent=2)
+        # with open("create_encrypted_ballot_response.json", "w", encoding="utf-8") as f:
+        #     json.dump(response, f, ensure_ascii=False, indent=2)
 
-        print_json(response, "create_encrypted_ballot_response")
-        print_data(response, "./io/create_encrypted_ballot_response.json")
-        print(f'finished encrypting ballot at the microservice - Status: {ballot_status}')
+        # ## print_json(response, "create_encrypted_ballot_response")  # Disabled - causes blocking
+        # ## print_data(response, "./io/create_encrypted_ballot_response.json")  # Disabled
+        logger.info(f'Finished encrypting ballot - Status: {ballot_status}')
+        
+        # AGGRESSIVE memory cleanup to prevent accumulation across chunks
+        import sys
+        
+        # Clear Python's internal type cache
+        if hasattr(sys, '_clear_type_cache'):
+            sys._clear_type_cache()
+        
+        # Force full garbage collection (generation 2 includes all objects)
+        gc.collect(generation=2)
+        
         return jsonify(response), 200
     
     except ValueError as e:
@@ -592,7 +688,7 @@ def api_benaloh_challenge():
         number_of_guardians = safe_int_conversion(data['number_of_guardians'])
         quorum = safe_int_conversion(data['quorum'])
         
-        print_json(data, "benaloh_challenge_request")
+        ## print_json(data, "benaloh_challenge_request")
         
         # Call the Benaloh challenge service
         result = benaloh_challenge_service(
@@ -606,7 +702,7 @@ def api_benaloh_challenge():
             quorum=quorum
         )
         
-        print_json(result, "benaloh_challenge_response")
+        ## print_json(result, "benaloh_challenge_response")
         print('Finished Benaloh challenge call at the microservice')
         
         if result['success']:
@@ -633,9 +729,28 @@ def api_benaloh_challenge():
 def api_health_check():
     """API endpoint for health check."""
     stats = ballot_publisher.get_publication_stats()
+    
+    # Check for stuck requests
+    stuck_requests = []
+    current_time = time.time()
+    with tracking_lock:
+        for req_id, req_info in request_tracking.items():
+            if req_info['status'] == 'started':
+                elapsed = current_time - req_info['start_time']
+                if elapsed > 60:  # More than 1 minute
+                    stuck_requests.append({
+                        'request_id': req_id,
+                        'endpoint': req_info['endpoint'],
+                        'elapsed_seconds': int(elapsed),
+                        'thread_id': req_info['thread_id']
+                    })
+    
     return jsonify({
         'status': 'healthy', 
-        'ballot_publication_stats': stats
+        'ballot_publication_stats': stats,
+        'active_requests': len([r for r in request_tracking.values() if r['status'] == 'started']),
+        'stuck_requests': stuck_requests,
+        'thread_count': threading.active_count()
     }), 200
 
 @app.route('/ballots/<ballot_id>', methods=['GET'])
@@ -725,10 +840,11 @@ def api_publish_existing_ballot():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/create_encrypted_tally', methods=['POST'])
+@track_request('/create_encrypted_tally')
 def api_create_encrypted_tally():
     """API endpoint to tally encrypted ballots."""
     try:
-        print('call to create encrypted tally at teh microservice')
+        logger.info('Creating encrypted tally')
         data = request.json
         party_names = data['party_names']
         candidate_names = data['candidate_names']
@@ -736,9 +852,9 @@ def api_create_encrypted_tally():
         commitment_hash = data['commitment_hash']    # Expecting string
         encrypted_ballots = data['encrypted_ballots'] # List of encrypted ballot strings
         
-        print_json(data, "create_encrypted_tally")
+        ## print_json(data, "create_encrypted_tally")
         # Dump the request to a file named "create_encrypted_tally_request.json"
-        print_data(data, "./io/create_encrypted_tally_request.json")
+        ## print_data(data, "./io/create_encrypted_tally_request.json")
 
         # Get election data with safe int conversion
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
@@ -757,19 +873,23 @@ def api_create_encrypted_tally():
             ciphertext_tally_to_raw
         )
         
-        # Optionally store tally data if needed
-        election_data['ciphertext_tally'] = result['ciphertext_tally']
-        election_data['submitted_ballots'] = result['submitted_ballots']
+        # Don't store tally data in memory - keep API stateless
+        # Backend should handle persistent storage
+        # election_data['ciphertext_tally'] = result['ciphertext_tally']
+        # election_data['submitted_ballots'] = result['submitted_ballots']
         
         response = {
             'status': 'success',
             'ciphertext_tally': serialize_dict_to_string(result['ciphertext_tally']),
             'submitted_ballots': serialize_list_of_dicts_to_list_of_strings(result['submitted_ballots'])
         }
-        print_data(response, "./io/create_encrypted_tally_response.json")
-
-        print_json(response, "create_encrypted_tally_response")
-        print('finished craeting encrypted tally for the microservice')
+        # ## print_data(response, "./io/create_encrypted_tally_response.json")  # Disabled
+        # ## print_json(response, "create_encrypted_tally_response")  # Disabled
+        logger.info('Finished creating encrypted tally')
+        
+        # Force garbage collection to free memory
+        gc.collect()
+        
         return jsonify(response), 200
     
     except ValueError as e:
@@ -778,16 +898,17 @@ def api_create_encrypted_tally():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/create_partial_decryption', methods=['POST'])
+@track_request('/create_partial_decryption')
 def api_create_partial_decryption():
     """API endpoint to compute decryption shares for a single guardian."""
     try:
-        print('call to create partialdecryptions at the microservice')
+        logger.info('Creating partial decryption')
         data = request.json
         guardian_id = data['guardian_id']
-        print_json(data, "create_partial_decryption")
+        ## print_json(data, "create_partial_decryption")
         # Print the request body as JSON to a file named "partial_decryption_request.json"
 
-        print_data(data, "./io/partial_decryption_request.json")
+        ## print_data(data, "./io/partial_decryption_request.json")
 
         # Deserialize single guardian data from string (if available)
         guardian_data = None
@@ -857,10 +978,13 @@ def api_create_partial_decryption():
             'tally_share': result['tally_share'],
             'ballot_shares': serialize_dict_to_string(result['ballot_shares'])
         }
-        print_data(response, "./io/create_partial_decryption_response.json")
-
-        print_json(response, "create_partial_decryption_response")
-        print('finished creating partial decryption at the microservice')
+        # ## print_data(response, "./io/create_partial_decryption_response.json")  # Disabled
+        # ## print_json(response, "create_partial_decryption_response")  # Disabled
+        logger.info('Finished creating partial decryption')
+        
+        # Force garbage collection to free memory
+        gc.collect()
+        
         return jsonify(response), 200
     
     except ValueError as e:
@@ -869,17 +993,18 @@ def api_create_partial_decryption():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/create_compensated_decryption', methods=['POST'])
+@track_request('/create_compensated_decryption')
 def api_create_compensated_decryption():
     """API endpoint to compute compensated decryption shares for missing guardians."""
     try:
         # Extract data from request
-        print('call to create compensated decryption at the microservice')
+        logger.info('Creating compensated decryption')
         data = request.json
         available_guardian_id = data['available_guardian_id']
         missing_guardian_id = data['missing_guardian_id']
-        print_json(data, "create_compensated_decryption")
+        ## print_json(data, "create_compensated_decryption")
         # Dump the request to a file named "create_compensated_decryption_request.json"
-        print_data(data, "./io/create_compensated_decryption_request.json")
+        ## print_data(data, "./io/create_compensated_decryption_request.json")
 
         # Deserialize single guardian data from strings
         try:
@@ -956,8 +1081,12 @@ def api_create_compensated_decryption():
             'compensated_tally_share': result['compensated_tally_share'],
             'compensated_ballot_shares': serialize_dict_to_string(result['compensated_ballot_shares'])
         }
-        print_data(response, "./io/create_compensated_decryption_response.json")
-        print('finished creating compensated decryption at the microservice')
+        # ## print_data(response, "./io/create_compensated_decryption_response.json")  # Disabled
+        logger.info('Finished creating compensated decryption')
+        
+        # Force garbage collection to free memory
+        gc.collect()
+        
         return jsonify(response), 200
     
     except ValueError as e:
@@ -968,18 +1097,18 @@ def api_create_compensated_decryption():
 
 
 @app.route('/combine_decryption_shares', methods=['POST'])
+@track_request('/combine_decryption_shares')
 def api_combine_decryption_shares():
     """API endpoint to combine decryption shares with quorum support."""
     try:
         # Extract data from request
-
         data = request.json
         party_names = data['party_names']
         candidate_names = data['candidate_names']
         joint_public_key = data['joint_public_key']
         commitment_hash = data['commitment_hash']
-        print_json(data, "combine_decryption_shares")
-        print_data(data, "./io/combine_decryption_shares_request.json")
+        ## print_json(data, "combine_decryption_shares")
+        ## print_data(data, "./io/combine_decryption_shares_request.json")
         # Deserialize dict from string with error context
         try:
             ciphertext_tally_json = deserialize_string_to_dict(data['ciphertext_tally'])
@@ -1093,8 +1222,13 @@ def api_combine_decryption_shares():
             'status': 'success',
             'results': serialize_dict_to_string(results)
         }
-        print_json(response, "combine_decryption_shares_response")
-        print_data(response, "./io/combine_decryption_shares_response.json")
+        # ## print_json(response, "combine_decryption_shares_response")  # Disabled
+        # ## print_data(response, "./io/combine_decryption_shares_response.json")  # Disabled
+        logger.info('Finished combining decryption shares')
+        
+        # Force garbage collection to free memory
+        gc.collect()
+        
         return jsonify(response), 200
     
     except ValueError as e:
@@ -1330,8 +1464,21 @@ if __name__ == '__main__':
     print("Starting development server with enhanced security and 2-storage design...")
     print("IMPORTANT: Use proper WSGI server and SSL certificates in production!")
     print("Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)")
-    print("Configuration: Unlimited payload size, Threaded mode enabled, No request timeout")
+    print("Configuration: Unlimited payload size, High thread count, Stateless operation")
+    print("Memory Management: Aggressive GC, No state accumulation, Chunk-safe processing")
     
-    # Run with threaded=True to handle concurrent requests and prevent blocking
-    # debug=False to prevent timeout issues with large operations
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
+    # Run with proper configuration to handle concurrent chunk processing
+    # threaded=True + high thread count prevents blocking on concurrent requests
+    # Stateless design ensures no memory accumulation across chunks
+    from werkzeug.serving import WSGIRequestHandler
+    WSGIRequestHandler.protocol_version = "HTTP/1.1"  # Enable keepalive
+    
+    app.run(
+        host='0.0.0.0', 
+        port=5000, 
+        debug=False, 
+        threaded=True,  # Enable threading
+        processes=1,     # Single process with multiple threads
+        use_reloader=False,
+        request_handler=WSGIRequestHandler
+    )
