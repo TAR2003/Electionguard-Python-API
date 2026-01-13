@@ -12,16 +12,19 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # =========================================================
 # CONFIG
 # =========================================================
-BASE_URL = "http://192.168.30.136:5000"
+BASE_URL = "http://192.168.30.128:5000"
 
 NUMBER_OF_GUARDIANS = 3
 QUORUM = 2
-BALLOT_COUNTS = [640]
+BALLOT_COUNTS = [200]
 
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
-CHUNK_SIZE = 32
+CHUNK_SIZE = 50
+
+# store API call timings: api_name -> list of elapsed seconds
+API_TIMINGS = defaultdict(list)
 
 # =========================================================
 # HELPERS
@@ -38,6 +41,12 @@ def time_api_call(api_name, url, payload, indent=0):
 
     assert response.status_code == 200, f"{api_name} failed: {response.text}"
     log(f"[API END] {api_name} ({elapsed:.3f}s)", indent)
+
+    # record timing for summary
+    try:
+        API_TIMINGS[api_name].append(elapsed)
+    except Exception:
+        pass
 
     return response.json(), elapsed
 
@@ -62,6 +71,9 @@ def run_chunked_election(ballot_count):
     print("\n" + "=" * 120)
     print(f"🚀 STARTING ELECTION — {ballot_count} BALLOTS")
     print("=" * 120)
+
+    # clear any previous run timings
+    API_TIMINGS.clear()
 
     # -----------------------------------------------------
     # STEP 1: SETUP GUARDIANS
@@ -302,6 +314,24 @@ def run_chunked_election(ballot_count):
     for cid, votes in final_aggregate.items():
         pct = (votes / total * 100) if total else 0
         print(f"{cid}: {votes} votes ({pct:.2f}%)")
+
+    # -----------------------------------------------------
+    # API TIMING SUMMARY
+    # -----------------------------------------------------
+    print("\nAPI TIMING SUMMARY")
+    if API_TIMINGS:
+        for api, times in sorted(API_TIMINGS.items()):
+            count = len(times)
+            if count:
+                total_t = sum(times)
+                avg = total_t / count
+                low = min(times)
+                high = max(times)
+                print(f"- {api}: calls={count}, avg={avg:.3f}s, min={low:.3f}s, max={high:.3f}s")
+            else:
+                print(f"- {api}: no recorded calls")
+    else:
+        print("No API timing data recorded.")
 
     print("=" * 120)
 
