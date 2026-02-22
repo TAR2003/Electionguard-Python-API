@@ -1,6 +1,11 @@
 #!/usr/bin/env python
+"""
+ballot_variable_test.py - ElectionGuard scalability test.
+Uses msgpack transport (application/msgpack) for max performance.
+"""
 
 import requests
+import msgpack
 import json
 import random
 import time
@@ -8,12 +13,12 @@ from typing import Dict, List, Tuple
 from collections import defaultdict
 from statistics import mean, stdev
 
-import urllib3  # ← ADD THIS
+import urllib3
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # ← ADD THIS
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # API Base URL
-BASE_URL = "http://127.0.0.1:5000"
+BASE_URL = "http://127.0.0.1:5000"  # explicit IPv4 — avoids localhost→::1 fallback (2s delay on Windows)
 
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5
@@ -21,6 +26,18 @@ QUORUM = 3
 BALLOT_COUNTS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]  # Array of ballot counts to test
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
+
+# Tally chunk size — avoids server timeouts for large ballot counts
+CHUNK_SIZE = 1000
+
+# Msgpack transport headers
+MSGPACK_HEADERS = {
+    "Content-Type": "application/msgpack",
+    "Accept": "application/msgpack",
+}
+
+# Persistent HTTP session — reuses TCP connections across all API calls (major speedup on Windows)
+_http_session = requests.Session()
 
 # Timing tracker
 timing_data = defaultdict(list)
@@ -39,69 +56,56 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.2f}TB"
 
 
-def time_api_call(api_name: str, url: str, json_data: dict) -> Tuple[dict, float]:
-    """Make an API call and record the response time and sizes."""
-    # Calculate request size
-    request_json = json.dumps(json_data)
-    request_size = len(request_json.encode('utf-8'))
-    
+def time_api_call(api_name: str, url: str, payload: dict) -> Tuple[dict, float]:
+    """Send msgpack request, receive msgpack response, and record timing/sizes."""
+    packed = msgpack.packb(payload, use_bin_type=True, default=str)
+    request_size = len(packed)
+
     start_time = time.time()
-    response = requests.post(url, json=json_data, verify=False, timeout=None)  # ← ADD verify=False AND timeout
-    end_time = time.time()
-    
-    # Calculate response size
+    response = _http_session.post(
+        url, data=packed, headers=MSGPACK_HEADERS, verify=False, timeout=None
+    )
+    elapsed_time = time.time() - start_time
+
     response_size = len(response.content)
-    
-    elapsed_time = end_time - start_time
     timing_data[api_name].append(elapsed_time)
     size_data[api_name]['request_sizes'].append(request_size)
     size_data[api_name]['response_sizes'].append(response_size)
-    
-    assert response.status_code == 200, f"{api_name} failed: {response.text}"
-    return response.json(), elapsed_time
+
+    assert response.status_code == 200, f"{api_name} failed ({response.status_code}): {response.text[:500]}"
+    data = msgpack.unpackb(response.content, raw=False)
+    return data, elapsed_time
 
 
-def find_guardian_data(guardian_id: str, guardian_data_list: List[str], 
-                       private_keys_list: List[str], public_keys_list: List[str], 
-                       polynomials_list: List[str]) -> Tuple[str, str, str, str]:
-    """Find the data for a specific guardian from the lists."""
-    
-    # Find guardian data
-    guardian_data_str = None
-    for gd_str in guardian_data_list:
-        gd = json.loads(gd_str)
-        if gd['id'] == guardian_id:
-            guardian_data_str = gd_str
-            break
-    
-    # Find private key
-    private_key_str = None
-    for pk_str in private_keys_list:
-        pk = json.loads(pk_str)
-        if pk['guardian_id'] == guardian_id:
-            private_key_str = pk_str
-            break
-    
-    # Find public key
-    public_key_str = None
-    for pk_str in public_keys_list:
-        pk = json.loads(pk_str)
-        if pk['guardian_id'] == guardian_id:
-            public_key_str = pk_str
-            break
-    
-    # Find polynomial
-    polynomial_str = None
-    for p_str in polynomials_list:
-        p = json.loads(p_str)
-        if p['guardian_id'] == guardian_id:
-            polynomial_str = p_str
-            break
-    
-    if not all([guardian_data_str, private_key_str, public_key_str, polynomial_str]):
+def chunk_list(data, size):
+    """Split a list into chunks of the given size."""
+    for i in range(0, len(data), size):
+        yield data[i:i + size]
+
+
+def find_guardian_data(guardian_id: str, guardian_data_list: list,
+                       private_keys_list: list, public_keys_list: list,
+                       polynomials_list: list):
+    """
+    Find data for a specific guardian from the lists.
+    With msgpack transport, all guardian data arrives as native Python dicts —
+    no json.loads() needed.
+    """
+    def _find(lst, key):
+        for item in lst:
+            if isinstance(item, dict) and item.get(key) == guardian_id:
+                return item
+        raise ValueError(f"Guardian {guardian_id} not found (key='{key}')")
+
+    gd   = _find(guardian_data_list, 'id')
+    pk   = _find(private_keys_list,  'guardian_id')
+    pubk = _find(public_keys_list,   'guardian_id')
+    poly = _find(polynomials_list,   'guardian_id')
+
+    if not all([gd, pk, pubk, poly]):
         raise ValueError(f"Missing data for guardian {guardian_id}")
-    
-    return guardian_data_str, private_key_str, public_key_str, polynomial_str
+
+    return gd, pk, pubk, poly
 
 
 def print_timing_summary():
@@ -245,278 +249,270 @@ def export_results_to_file(ballot_count, stats, previous_ballot_count=None, prev
 
 
 def run_election_workflow_with_timing(number_of_ballots):
-    """Run the complete election workflow and measure all API response times."""
-    
+    """Run the complete election workflow and measure all API response times.
+
+    Large ballot counts are split into CHUNK_SIZE chunks so each tally call
+    stays well under timeout limits. Results are aggregated across chunks.
+    """
+
     print("=" * 100)
     print("ELECTION WORKFLOW PERFORMANCE TEST")
     print("=" * 100)
     print(f"Configuration:")
-    print(f"  - Guardians: {NUMBER_OF_GUARDIANS}")
-    print(f"  - Quorum: {QUORUM}")
-    print(f"  - Ballots: {number_of_ballots}")
-    print(f"  - Parties: {len(PARTY_NAMES)}")
+    print(f"  - Guardians:  {NUMBER_OF_GUARDIANS}")
+    print(f"  - Quorum:     {QUORUM}")
+    print(f"  - Ballots:    {number_of_ballots}")
+    print(f"  - Chunk size: {CHUNK_SIZE}")
+    print(f"  - Parties:    {len(PARTY_NAMES)}")
     print(f"  - Candidates: {len(CANDIDATE_NAMES)}")
     print("=" * 100)
-    
+
+    # ------------------------------------------------------------------
     # STEP 1: Setup Guardians
+    # ------------------------------------------------------------------
     print("\n🔹 STEP 1: Setting up guardians...")
-    setup_data = {
-        "number_of_guardians": NUMBER_OF_GUARDIANS,
-        "quorum": QUORUM,
-        "party_names": PARTY_NAMES,
-        "candidate_names": CANDIDATE_NAMES
-    }
-    
     setup_result, setup_time = time_api_call(
         "setup_guardians",
         f"{BASE_URL}/setup_guardians",
-        setup_data
-    )
-    
-    print(f"✅ Guardian setup completed in {setup_time:.4f}s")
-    
-    # Extract setup data
-    joint_public_key = setup_result['joint_public_key']
-    commitment_hash = setup_result['commitment_hash']
-    guardian_data = setup_result['guardian_data']
-    private_keys = setup_result['private_keys']
-    public_keys = setup_result['public_keys']
-    polynomials = setup_result['polynomials']
-    number_of_guardians = setup_result['number_of_guardians']
-    quorum = setup_result['quorum']
-    
-    # STEP 2: Create and encrypt ballots
-    print(f"\n🔹 STEP 2: Creating {number_of_ballots} encrypted ballots...")
-    ballot_data = []
-    
-    for i in range(number_of_ballots):
-        chosen_candidate = random.choice(CANDIDATE_NAMES)
-        ballot_request = {
+        {
+            "number_of_guardians": NUMBER_OF_GUARDIANS,
+            "quorum": QUORUM,
             "party_names": PARTY_NAMES,
             "candidate_names": CANDIDATE_NAMES,
-            "candidate_name": chosen_candidate,
-            "ballot_id": f"ballot-{i+1}",
-            "joint_public_key": joint_public_key,
-            "commitment_hash": commitment_hash,
-            "number_of_guardians": number_of_guardians,
-            "quorum": quorum
-        }
-        
-        ballot_result, ballot_time = time_api_call(
+        },
+    )
+    print(f"✅ Guardian setup completed in {setup_time:.4f}s")
+
+    # Extract setup data — all values arrive as native Python types via msgpack
+    joint_public_key    = setup_result['joint_public_key']
+    commitment_hash     = setup_result['commitment_hash']
+    guardian_data       = setup_result['guardian_data']   # list of dicts
+    private_keys        = setup_result['private_keys']    # list of dicts
+    public_keys         = setup_result['public_keys']     # list of dicts
+    polynomials         = setup_result['polynomials']     # list of dicts
+    number_of_guardians = setup_result['number_of_guardians']
+    quorum              = setup_result['quorum']
+
+    # ------------------------------------------------------------------
+    # STEP 2: Encrypt ballots
+    # ------------------------------------------------------------------
+    print(f"\n🔹 STEP 2: Creating {number_of_ballots} encrypted ballots...")
+    all_encrypted_ballots = []
+
+    for i in range(number_of_ballots):
+        ballot_result, _ = time_api_call(
             "create_encrypted_ballot",
             f"{BASE_URL}/create_encrypted_ballot",
-            ballot_request
-        )
-        
-        ballot_data.append(ballot_result['encrypted_ballot'])
-        
-        if (i + 1) % 20 == 0:
-            print(f"  ✓ Encrypted {i + 1}/{number_of_ballots} ballots...")
-    
-    print(f"✅ All {number_of_ballots} ballots encrypted")
-    
-    # STEP 3: Tally encrypted ballots
-    print("\n🔹 STEP 3: Tallying encrypted ballots...")
-    tally_request = {
-        "party_names": PARTY_NAMES,
-        "candidate_names": CANDIDATE_NAMES,
-        "joint_public_key": joint_public_key,
-        "commitment_hash": commitment_hash,
-        "encrypted_ballots": ballot_data,
-        "number_of_guardians": number_of_guardians,
-        "quorum": quorum
-    }
-    
-    tally_result, tally_time = time_api_call(
-        "create_encrypted_tally",
-        f"{BASE_URL}/create_encrypted_tally",
-        tally_request
-    )
-    
-    print(f"✅ Tally created in {tally_time:.4f}s")
-    
-    ciphertext_tally = tally_result['ciphertext_tally']
-    submitted_ballots = tally_result['submitted_ballots']
-    
-    # STEP 4: Select available and missing guardians for quorum
-    print(f"\n🔹 STEP 4: Selecting {QUORUM} out of {NUMBER_OF_GUARDIANS} guardians for quorum decryption...")
-    
-    # Use first QUORUM guardians as available, rest as missing
-    available_guardian_ids = [str(i+1) for i in range(QUORUM)]
-    missing_guardian_ids = [str(i+1) for i in range(QUORUM, NUMBER_OF_GUARDIANS)]
-    
-    print(f"  ✓ Available guardians: {', '.join(available_guardian_ids)}")
-    print(f"  ✓ Missing guardians: {', '.join(missing_guardian_ids)}")
-    
-    # STEP 5: Compute decryption shares for available guardians
-    print(f"\n🔹 STEP 5: Computing decryption shares for {len(available_guardian_ids)} available guardians...")
-    
-    available_guardian_shares = {}
-    
-    for guardian_id in available_guardian_ids:
-        guardian_data_str, private_key_str, public_key_str, polynomial_str = find_guardian_data(
-            guardian_id, guardian_data, private_keys, public_keys, polynomials
-        )
-        
-        partial_request = {
-            "guardian_id": guardian_id,
-            "guardian_data": guardian_data_str,
-            "private_key": private_key_str,
-            "public_key": public_key_str,
-            "polynomial": polynomial_str,
-            "party_names": PARTY_NAMES,
-            "candidate_names": CANDIDATE_NAMES,
-            "ciphertext_tally": ciphertext_tally,
-            "submitted_ballots": submitted_ballots,
-            "joint_public_key": joint_public_key,
-            "commitment_hash": commitment_hash,
-            "number_of_guardians": number_of_guardians,
-            "quorum": quorum
-        }
-        
-        partial_result, partial_time = time_api_call(
-            "create_partial_decryption",
-            f"{BASE_URL}/create_partial_decryption",
-            partial_request
-        )
-        
-        available_guardian_shares[guardian_id] = {
-            'guardian_public_key': partial_result['guardian_public_key'],
-            'tally_share': partial_result['tally_share'],
-            'ballot_shares': partial_result['ballot_shares']
-        }
-        
-        print(f"  ✓ Guardian {guardian_id} computed shares in {partial_time:.4f}s")
-    
-    # STEP 6: Compute compensated decryption shares for missing guardians
-    print(f"\n🔹 STEP 6: Computing compensated shares for {len(missing_guardian_ids)} missing guardians...")
-    
-    compensated_shares = {}
-    compensation_count = 0
-    
-    for missing_guardian_id in missing_guardian_ids:
-        compensated_shares[missing_guardian_id] = {}
-        
-        for available_guardian_id in available_guardian_ids:
-            available_guardian_data_str, available_private_key_str, available_public_key_str, available_polynomial_str = find_guardian_data(
-                available_guardian_id, guardian_data, private_keys, public_keys, polynomials
-            )
-            
-            missing_guardian_data_str, _, _, _ = find_guardian_data(
-                missing_guardian_id, guardian_data, private_keys, public_keys, polynomials
-            )
-            
-            compensated_request = {
-                "available_guardian_id": available_guardian_id,
-                "missing_guardian_id": missing_guardian_id,
-                "available_guardian_data": available_guardian_data_str,
-                "missing_guardian_data": missing_guardian_data_str,
-                "available_private_key": available_private_key_str,
-                "available_public_key": available_public_key_str,
-                "available_polynomial": available_polynomial_str,
+            {
                 "party_names": PARTY_NAMES,
                 "candidate_names": CANDIDATE_NAMES,
-                "ciphertext_tally": ciphertext_tally,
-                "submitted_ballots": submitted_ballots,
+                "candidate_name": random.choice(CANDIDATE_NAMES),
+                "ballot_id": f"ballot-{i + 1}",
                 "joint_public_key": joint_public_key,
                 "commitment_hash": commitment_hash,
                 "number_of_guardians": number_of_guardians,
-                "quorum": quorum
-            }
-            
-            compensated_result, compensated_time = time_api_call(
-                "create_compensated_decryption",
-                f"{BASE_URL}/create_compensated_decryption",
-                compensated_request
+                "quorum": quorum,
+            },
+        )
+        all_encrypted_ballots.append(ballot_result['encrypted_ballot'])
+
+        if (i + 1) % 100 == 0:
+            print(f"  ✓ Encrypted {i + 1}/{number_of_ballots} ballots...")
+
+    print(f"✅ All {number_of_ballots} ballots encrypted")
+
+    # ------------------------------------------------------------------
+    # STEP 3: Split into chunks
+    # ------------------------------------------------------------------
+    chunks = list(chunk_list(all_encrypted_ballots, CHUNK_SIZE))
+    print(f"\n🔹 STEP 3: Processing {len(chunks)} chunk(s) of up to {CHUNK_SIZE} ballots each...")
+
+    # Guardian selection: first QUORUM guardians available, rest missing
+    available_guardian_ids = [str(i + 1) for i in range(QUORUM)]
+    missing_guardian_ids   = [str(i + 1) for i in range(QUORUM, NUMBER_OF_GUARDIANS)]
+    print(f"  ✓ Available guardians: {', '.join(available_guardian_ids)}")
+    print(f"  ✓ Missing guardians:   {', '.join(missing_guardian_ids)}")
+
+    # Accumulate vote totals across all chunks
+    final_vote_totals: Dict[str, int] = defaultdict(int)
+    last_results = None  # keep the last chunk's result for metadata
+
+    for chunk_idx, chunk in enumerate(chunks, start=1):
+        chunk_label = f"chunk {chunk_idx}/{len(chunks)} ({len(chunk)} ballots)"
+        print(f"\n{'─' * 60}")
+        print(f"[CHUNK {chunk_idx}/{len(chunks)}] Processing {len(chunk)} ballots...")
+        print(f"{'─' * 60}")
+
+        # ----------------------------------------------------------
+        # STEP 3a: Tally this chunk
+        # ----------------------------------------------------------
+        print(f"  🔸 Tallying {chunk_label}...")
+        tally_result, tally_time = time_api_call(
+            "create_encrypted_tally",
+            f"{BASE_URL}/create_encrypted_tally",
+            {
+                "party_names": PARTY_NAMES,
+                "candidate_names": CANDIDATE_NAMES,
+                "joint_public_key": joint_public_key,
+                "commitment_hash": commitment_hash,
+                "encrypted_ballots": chunk,
+                "number_of_guardians": number_of_guardians,
+                "quorum": quorum,
+            },
+        )
+        print(f"  ✅ Tally done in {tally_time:.4f}s")
+
+        ciphertext_tally  = tally_result['ciphertext_tally']
+        submitted_ballots = tally_result['submitted_ballots']
+
+        # ----------------------------------------------------------
+        # STEP 3b: Partial decryption (available guardians)
+        # ----------------------------------------------------------
+        print(f"  🔸 Partial decryptions ({len(available_guardian_ids)} guardians)...")
+        chunk_shares: Dict[str, dict] = {}
+
+        for gid in available_guardian_ids:
+            gd, pk, pubk, poly = find_guardian_data(
+                gid, guardian_data, private_keys, public_keys, polynomials
             )
-            
-            compensated_shares[missing_guardian_id][available_guardian_id] = {
-                'compensated_tally_share': compensated_result['compensated_tally_share'],
-                'compensated_ballot_shares': compensated_result['compensated_ballot_shares']
-            }
-            
-            compensation_count += 1
-            print(f"  ✓ Guardian {available_guardian_id} compensated for {missing_guardian_id} in {compensated_time:.4f}s")
-    
-    print(f"✅ Completed {compensation_count} compensated decryptions")
-    
-    # STEP 7: Combine all shares to get final results
-    print("\n🔹 STEP 7: Combining all decryption shares...")
-    
-    # Prepare available guardian shares
-    available_guardian_ids_list = []
-    available_guardian_public_keys = []
-    available_tally_shares = []
-    available_ballot_shares = []
-    
-    for guardian_id, share_data in available_guardian_shares.items():
-        available_guardian_ids_list.append(guardian_id)
-        available_guardian_public_keys.append(share_data['guardian_public_key'])
-        available_tally_shares.append(share_data['tally_share'])
-        available_ballot_shares.append(share_data['ballot_shares'])
-    
-    # Prepare compensated shares
-    missing_guardian_ids_list = []
-    compensating_guardian_ids_list = []
-    compensated_tally_shares = []
-    compensated_ballot_shares = []
-    
-    for missing_guardian_id, compensating_data in compensated_shares.items():
-        for available_guardian_id, comp_data in compensating_data.items():
-            missing_guardian_ids_list.append(missing_guardian_id)
-            compensating_guardian_ids_list.append(available_guardian_id)
-            compensated_tally_shares.append(comp_data['compensated_tally_share'])
-            compensated_ballot_shares.append(comp_data['compensated_ballot_shares'])
-    
-    combine_request = {
-        "party_names": PARTY_NAMES,
-        "candidate_names": CANDIDATE_NAMES,
-        "joint_public_key": joint_public_key,
-        "commitment_hash": commitment_hash,
-        "ciphertext_tally": ciphertext_tally,
-        "submitted_ballots": submitted_ballots,
-        "guardian_data": guardian_data,
-        "available_guardian_ids": available_guardian_ids_list,
-        "available_guardian_public_keys": available_guardian_public_keys,
-        "available_tally_shares": available_tally_shares,
-        "available_ballot_shares": available_ballot_shares,
-        "missing_guardian_ids": missing_guardian_ids_list,
-        "compensating_guardian_ids": compensating_guardian_ids_list,
-        "compensated_tally_shares": compensated_tally_shares,
-        "compensated_ballot_shares": compensated_ballot_shares,
-        "quorum": quorum,
-        "number_of_guardians": number_of_guardians
-    }
-    
-    combine_result, combine_time = time_api_call(
-        "combine_decryption_shares",
-        f"{BASE_URL}/combine_decryption_shares",
-        combine_request
-    )
-    
-    print(f"✅ Combined shares in {combine_time:.4f}s")
-    
-    results_str = combine_result['results']
-    results = json.loads(results_str)
-    
-    # STEP 8: Display final results
-    print("\n🔹 STEP 8: Final Election Results")
+            partial_result, partial_time = time_api_call(
+                "create_partial_decryption",
+                f"{BASE_URL}/create_partial_decryption",
+                {
+                    "guardian_id":     gid,
+                    "guardian_data":   gd,
+                    "private_key":     pk,
+                    "public_key":      pubk,
+                    "polynomial":      poly,
+                    "party_names":     PARTY_NAMES,
+                    "candidate_names": CANDIDATE_NAMES,
+                    "ciphertext_tally":   ciphertext_tally,
+                    "submitted_ballots":  submitted_ballots,
+                    "joint_public_key":   joint_public_key,
+                    "commitment_hash":    commitment_hash,
+                    "number_of_guardians": number_of_guardians,
+                    "quorum":             quorum,
+                },
+            )
+            chunk_shares[gid] = partial_result
+            print(f"    ✓ Guardian {gid} partial decrypt in {partial_time:.4f}s")
+
+        # ----------------------------------------------------------
+        # STEP 3c: Compensated decryption (missing guardians)
+        # ----------------------------------------------------------
+        print(f"  🔸 Compensated decryptions ({len(missing_guardian_ids)} missing)...")
+        miss_ids_flat, comp_ids_flat = [], []
+        comp_tally_shares, comp_ballot_shares = [], []
+
+        for mid in missing_guardian_ids:
+            mgd, _, _, _ = find_guardian_data(
+                mid, guardian_data, private_keys, public_keys, polynomials
+            )
+            for aid in available_guardian_ids:
+                agd, apk, apubk, apoly = find_guardian_data(
+                    aid, guardian_data, private_keys, public_keys, polynomials
+                )
+                comp_result, comp_time = time_api_call(
+                    "create_compensated_decryption",
+                    f"{BASE_URL}/create_compensated_decryption",
+                    {
+                        "available_guardian_id":   aid,
+                        "missing_guardian_id":     mid,
+                        "available_guardian_data": agd,
+                        "missing_guardian_data":   mgd,
+                        "available_private_key":   apk,
+                        "available_public_key":    apubk,
+                        "available_polynomial":    apoly,
+                        "party_names":     PARTY_NAMES,
+                        "candidate_names": CANDIDATE_NAMES,
+                        "ciphertext_tally":    ciphertext_tally,
+                        "submitted_ballots":   submitted_ballots,
+                        "joint_public_key":    joint_public_key,
+                        "commitment_hash":     commitment_hash,
+                        "number_of_guardians": number_of_guardians,
+                        "quorum":              quorum,
+                    },
+                )
+                miss_ids_flat.append(mid)
+                comp_ids_flat.append(aid)
+                comp_tally_shares.append(comp_result['compensated_tally_share'])
+                comp_ballot_shares.append(comp_result['compensated_ballot_shares'])
+                print(f"    ✓ Guardian {aid} compensated for {mid} in {comp_time:.4f}s")
+
+        # ----------------------------------------------------------
+        # STEP 3d: Combine shares
+        # ----------------------------------------------------------
+        print(f"  🔸 Combining shares for {chunk_label}...")
+        combine_result, combine_time = time_api_call(
+            "combine_decryption_shares",
+            f"{BASE_URL}/combine_decryption_shares",
+            {
+                "party_names":     PARTY_NAMES,
+                "candidate_names": CANDIDATE_NAMES,
+                "joint_public_key":   joint_public_key,
+                "commitment_hash":    commitment_hash,
+                "ciphertext_tally":   ciphertext_tally,
+                "submitted_ballots":  submitted_ballots,
+                "guardian_data":      guardian_data,
+                "available_guardian_ids":         available_guardian_ids,
+                "available_guardian_public_keys": [chunk_shares[g]['guardian_public_key'] for g in available_guardian_ids],
+                "available_tally_shares":         [chunk_shares[g]['tally_share']          for g in available_guardian_ids],
+                "available_ballot_shares":        [chunk_shares[g]['ballot_shares']        for g in available_guardian_ids],
+                "missing_guardian_ids":      miss_ids_flat,
+                "compensating_guardian_ids": comp_ids_flat,
+                "compensated_tally_shares":  comp_tally_shares,
+                "compensated_ballot_shares": comp_ballot_shares,
+                "quorum":              quorum,
+                "number_of_guardians": number_of_guardians,
+            },
+        )
+        print(f"  ✅ Combined in {combine_time:.4f}s")
+
+        # results arrives as a native dict via msgpack — no json.loads needed
+        chunk_results = combine_result['results']
+        last_results = chunk_results
+
+        candidates = chunk_results.get('results', {}).get('candidates', {})
+        for cid, info in candidates.items():
+            final_vote_totals[cid] += int(float(info.get('votes', 0)))
+
+    # ------------------------------------------------------------------
+    # STEP 4: Display aggregated final results
+    # ------------------------------------------------------------------
+    print("\n🔹 STEP 4: Final Aggregated Election Results")
     print("=" * 80)
-    
-    election_info = results['election']
-    print(f"Election: {election_info['name']}")
-    print(f"Guardians: {election_info['number_of_guardians']} total, {election_info['quorum']} quorum")
-    print(f"Total ballots cast: {results['results']['total_ballots_cast']}")
-    print(f"Valid ballots: {results['results']['total_valid_ballots']}")
-    print(f"Spoiled ballots: {results['results']['total_spoiled_ballots']}")
-    
-    print("\n📊 Vote Counts:")
-    for candidate_id, votes_info in results['results']['candidates'].items():
-        print(f"  {candidate_id}: {votes_info['votes']} votes ({votes_info['percentage']}%)")
-    
+
+    if last_results and 'election' in last_results:
+        election_info = last_results['election']
+        print(f"Election: {election_info.get('name', 'N/A')}")
+        print(f"Guardians: {election_info.get('number_of_guardians', NUMBER_OF_GUARDIANS)} total, "
+              f"{election_info.get('quorum', QUORUM)} quorum")
+
+    total_votes = sum(final_vote_totals.values())
+    print(f"Total ballots cast: {total_votes}")
+    print(f"Chunks processed: {len(chunks)}")
+
+    print("\n📊 Vote Counts (aggregated across all chunks):")
+    for candidate_id, votes in sorted(final_vote_totals.items()):
+        pct = (votes / total_votes * 100) if total_votes else 0
+        print(f"  {candidate_id}: {votes} votes ({pct:.2f}%)")
+
     print("\n✅ ELECTION WORKFLOW COMPLETED SUCCESSFULLY!")
-    
-    return results
+
+    # Return a dict compatible with the reporting functions
+    return {
+        'election': last_results.get('election', {}) if last_results else {},
+        'results': {
+            'total_ballots_cast': total_votes,
+            'total_valid_ballots': total_votes,
+            'total_spoiled_ballots': 0,
+            'candidates': {
+                cid: {'votes': votes, 'percentage': f"{(votes / total_votes * 100):.2f}" if total_votes else '0.00'}
+                for cid, votes in final_vote_totals.items()
+            },
+        },
+        'chunks': len(chunks),
+    }
 
 
 def main():
@@ -587,5 +583,9 @@ def main():
 
 
 if __name__ == "__main__":
-    success = main()
+    success = False
+    try:
+        success = main()
+    finally:
+        _http_session.close()
     exit(0 if success else 1)
