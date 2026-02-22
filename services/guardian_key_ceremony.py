@@ -16,6 +16,7 @@ import base64
 from collections import defaultdict
 
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import to_binary_transport, from_binary_transport
 from electionguard.constants import get_constants
 from electionguard.guardian import Guardian
 from electionguard.key_ceremony_mediator import KeyCeremonyMediator
@@ -224,12 +225,12 @@ class GuardianKeyCeremonyState:
                 "sequence_order": guardian._election_keys.sequence_order,
                 "public_key": int(guardian._election_keys.key_pair.public_key)
             }
-            guardians_data.append(to_raw(guardian_dict))
+            guardians_data.append(to_binary_transport(guardian_dict))
             
             # Collect private keys and polynomials
             private_keys.append(data["private_key"])
             public_keys.append(data["public_key"])
-            polynomials.append(to_raw(guardian._election_keys.polynomial))
+            polynomials.append(to_binary_transport(guardian._election_keys.polynomial))
         
         # Create manifest
         manifest = create_election_manifest(self.party_names, self.candidate_names)
@@ -238,7 +239,7 @@ class GuardianKeyCeremonyState:
             'status': 'success',
             'joint_public_key': str(self.joint_public_key),
             'commitment_hash': str(self.commitment_hash),
-            'manifest': to_raw(manifest),
+            'manifest': to_binary_transport(manifest),
             'guardian_data': guardians_data,
             'private_keys': private_keys,
             'public_keys': public_keys,

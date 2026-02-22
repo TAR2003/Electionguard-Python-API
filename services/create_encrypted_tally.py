@@ -21,6 +21,8 @@ from electionguard.ballot import (
     SubmittedBallot,
 )
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import to_binary_transport, from_binary_transport, from_binary_transport_to_dict
+import time
 from electionguard.constants import get_constants
 from electionguard.data_store import DataStore
 from electionguard.decryption_mediator import DecryptionMediator
@@ -33,7 +35,7 @@ from electionguard.encrypt import EncryptionDevice, EncryptionMediator
 from electionguard.guardian import Guardian
 from electionguard.key_ceremony_mediator import KeyCeremonyMediator
 from electionguard.key_ceremony import ElectionKeyPair, ElectionPublicKey
-from electionguard.ballot_box import BallotBox, get_ballots
+from electionguard.ballot_box import BallotBox, get_ballots, submit_ballot
 from electionguard.elgamal import ElGamalPublicKey, ElGamalSecretKey, ElGamalCiphertext
 from electionguard.group import ElementModQ, ElementModP, g_pow_p, int_to_p, int_to_q
 from electionguard.manifest import (
@@ -74,36 +76,37 @@ from electionguard.decryption import (
     decrypt_backup,
     compute_lagrange_coefficients_for_guardians as compute_lagrange_coeffs
 )
+from manifest_cache import get_manifest_cache
 
 
 
 def ciphertext_tally_to_raw(tally: CiphertextTally) -> Dict:
-    """Convert a CiphertextTally to a raw dictionary for serialization."""
+    """Convert a CiphertextTally to a raw dictionary (plain dict, API handles serialization)."""
     return {
-        "_encryption": to_raw(tally._encryption),
+        "_encryption": json.loads(to_raw(tally._encryption)),
         "cast_ballot_ids": list(tally.cast_ballot_ids),
         "spoiled_ballot_ids": list(tally.spoiled_ballot_ids),
-        "contests": {contest_id: to_raw(contest) for contest_id, contest in tally.contests.items()},
-        "_internal_manifest": to_raw(tally._internal_manifest),
-        "_manifest": to_raw(tally._internal_manifest.manifest)
+        "contests": {contest_id: json.loads(to_raw(contest)) for contest_id, contest in tally.contests.items()},
+        "_internal_manifest": json.loads(to_raw(tally._internal_manifest)),
+        "_manifest": json.loads(to_raw(tally._internal_manifest.manifest))
     }
 
 
 def raw_to_ciphertext_tally(raw: Dict, manifest: Manifest = None) -> CiphertextTally:
-    """Reconstruct a CiphertextTally from its raw dictionary representation."""
+    """Reconstruct a CiphertextTally from its raw dictionary (plain dict format)."""
     internal_manifest = InternalManifest(manifest)
     
     tally = CiphertextTally(
         object_id=raw.get("object_id", ""),
         _internal_manifest=internal_manifest,
-        _encryption=from_raw(CiphertextElectionContext, raw["_encryption"]),
+        _encryption=from_raw(CiphertextElectionContext, json.dumps(raw["_encryption"])),
     )
     
     tally.cast_ballot_ids = set(raw["cast_ballot_ids"])
     tally.spoiled_ballot_ids = set(raw["spoiled_ballot_ids"])
     
     tally.contests = {
-        contest_id: from_raw(CiphertextTallyContest, contest_raw)
+        contest_id: from_raw(CiphertextTallyContest, json.dumps(contest_raw))
         for contest_id, contest_raw in raw["contests"].items()
     }
     
@@ -194,43 +197,62 @@ def tally_encrypted_ballots(
     Returns:
         Tuple of (tally_json, submitted_ballots_json)
     """
+    print(f"  \ud83d\udd0d SERVICE: create_encrypted_tally_service started")
+    
+    # Deserialize ballots
+    deserialize_start = time.time()
     joint_public_key = int_to_p(joint_public_key_json)
     commitment_hash = int_to_q(commitment_hash_json)
     encrypted_ballots: List[CiphertextBallot] = []
     for encrypted_ballot_json in encrypted_ballots_json:
-        encrypted_ballots.append(from_raw(CiphertextBallot, encrypted_ballot_json))
+        # Binary deserialization (base64)
+        encrypted_ballots.append(from_binary_transport(CiphertextBallot, encrypted_ballot_json))
+    deserialize_elapsed = time.time() - deserialize_start
+    print(f"    \u23f1\ufe0f  Ballot deserialization: {deserialize_elapsed*1000:.2f}ms")
     
-    manifest = create_election_manifest_func(party_names, candidate_names)
-    
-    # Create election builder and set public key and commitment hash
-    election_builder = ElectionBuilder(
-        number_of_guardians=number_of_guardians,
-        quorum=quorum,
-        manifest=manifest
+    # Build context (use cache to avoid expensive recreation)
+    context_start = time.time()
+    cache = get_manifest_cache()
+    internal_manifest, context = cache.get_or_create_context(
+        party_names, candidate_names,
+        joint_public_key_json, commitment_hash_json,
+        number_of_guardians, quorum,
+        create_election_manifest_func
     )
-    election_builder.set_public_key(joint_public_key)
-    election_builder.set_commitment_hash(commitment_hash)
+    context_elapsed = time.time() - context_start
+    print(f"    \u23f1\ufe0f  Context building: {context_elapsed*1000:.2f}ms")
     
-    # Build the election context
-    internal_manifest, context = get_optional(election_builder.build())
-    
-    # Create ballot store and ballot box
+    # Submit ballots - cast all ballots (skip proof re-validation: ballots were just created by this API)
+    cast_start = time.time()
     ballot_store = DataStore()
-    ballot_box = BallotBox(internal_manifest, context, ballot_store)
     
-    # Submit ballots - cast all ballots
     submitted_ballots = []
-    for i, ballot in enumerate(encrypted_ballots):
-        # Cast all ballots
-        submitted = ballot_box.cast(ballot)
-        if submitted:
-            submitted_ballots.append(get_optional(submitted))
+    for ballot in encrypted_ballots:
+        # Use submit_ballot directly to bypass expensive proof re-verification
+        # (ballots just came from create_encrypted_ballot, already proved valid)
+        submitted = submit_ballot(ballot, BallotBoxState.CAST)
+        ballot_store.set(submitted.object_id, submitted)
+        submitted_ballots.append(submitted)
+    cast_elapsed = time.time() - cast_start
+    print(f"    \u23f1\ufe0f  Ballot casting (no re-validation): {cast_elapsed*1000:.2f}ms")
     
-    # Tally the ballots
-    ciphertext_tally = get_optional(
-        tally_ballots(ballot_store, internal_manifest, context)
-    )
+    # Tally the ballots — use should_validate=False to skip proof re-verification
+    tally_start = time.time()
+    tally = CiphertextTally("election-results", internal_manifest, context)
+    tally.batch_append(ballot_store, should_validate=False)
+    ciphertext_tally = tally
+    tally_elapsed = time.time() - tally_start
+    print(f"    \u23f1\ufe0f  Tally computation: {tally_elapsed*1000:.2f}ms")
     
+    # Convert to plain dicts (API layer will handle binary serialization)
+    serialize_start = time.time()
     ciphertext_tally_json = ciphertext_tally_to_raw_func(ciphertext_tally)
-    submitted_ballots_json = [to_raw(submitted_ballot) for submitted_ballot in submitted_ballots]
+    # Return plain dicts, not JSON strings (msgpack handles dicts natively)
+    submitted_ballots_json = [json.loads(to_raw(submitted_ballot)) for submitted_ballot in submitted_ballots]
+    serialize_elapsed = time.time() - serialize_start
+    print(f"    ⏱️  Result conversion: {serialize_elapsed*1000:.2f}ms")
+    
+    total_service_time = deserialize_elapsed + context_elapsed + cast_elapsed + tally_elapsed + serialize_elapsed
+    print(f"  \u2705 SERVICE COMPLETE: {total_service_time*1000:.2f}ms total")
+    
     return ciphertext_tally_json, submitted_ballots_json

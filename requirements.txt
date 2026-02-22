@@ -36,3 +36,4 @@ cryptography
 python-dotenv
 pqcrypto
 psycopg2-binary
+msgpack

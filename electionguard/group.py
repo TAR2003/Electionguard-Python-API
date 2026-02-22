@@ -87,6 +87,11 @@ ElementModPOrQorInt = Union[ElementModP, ElementModQ, int]
 ElementModQorInt = Union[ElementModQ, int]
 ElementModPorInt = Union[ElementModP, int]
 
+# Cache constants at module load time to avoid repeated getenv() calls on every pow_p/g_pow_p/etc.
+_LARGE_PRIME: mpz = mpz(get_large_prime())
+_SMALL_PRIME: mpz = mpz(get_small_prime())
+_GENERATOR: mpz = mpz(get_generator())
+
 
 def _get_mpz(input: Union[BaseElement, int]) -> mpz:
     """Get BaseElement or integer as mpz."""
@@ -148,7 +153,7 @@ def add_q(*elems: ElementModQorInt) -> ElementModQ:
     sum = _get_mpz(0)
     for e in elems:
         e = _get_mpz(e)
-        sum = (sum + e) % get_small_prime()
+        sum = (sum + e) % _SMALL_PRIME
     return ElementModQ(sum)
 
 
@@ -156,20 +161,20 @@ def a_minus_b_q(a: ElementModQorInt, b: ElementModQorInt) -> ElementModQ:
     """Compute (a-b) mod q."""
     a = _get_mpz(a)
     b = _get_mpz(b)
-    return ElementModQ((a - b) % get_small_prime())
+    return ElementModQ((a - b) % _SMALL_PRIME)
 
 
 def div_p(a: ElementModPOrQorInt, b: ElementModPOrQorInt) -> ElementModP:
     """Compute a/b mod p."""
     b = _get_mpz(b)
-    inverse = invert(b, _get_mpz(get_large_prime()))
+    inverse = invert(b, _LARGE_PRIME)
     return mult_p(a, inverse)
 
 
 def div_q(a: ElementModPOrQorInt, b: ElementModPOrQorInt) -> ElementModQ:
     """Compute a/b mod q."""
     b = _get_mpz(b)
-    inverse = invert(b, _get_mpz(get_small_prime()))
+    inverse = invert(b, _SMALL_PRIME)
     return mult_q(a, inverse)
 
 
@@ -186,7 +191,7 @@ def a_plus_bc_q(
     a = _get_mpz(a)
     b = _get_mpz(b)
     c = _get_mpz(c)
-    return ElementModQ((a + b * c) % get_small_prime())
+    return ElementModQ((a + b * c) % _SMALL_PRIME)
 
 
 def mult_inv_p(e: ElementModPOrQorInt) -> ElementModP:
@@ -197,7 +202,7 @@ def mult_inv_p(e: ElementModPOrQorInt) -> ElementModP:
     """
     e = _get_mpz(e)
     assert e != 0, "No multiplicative inverse for zero"
-    return ElementModP(powmod(e, -1, get_large_prime()))
+    return ElementModP(powmod(e, -1, _LARGE_PRIME))
 
 
 def pow_p(b: ElementModPOrQorInt, e: ElementModPOrQorInt) -> ElementModP:
@@ -209,7 +214,7 @@ def pow_p(b: ElementModPOrQorInt, e: ElementModPOrQorInt) -> ElementModP:
     """
     b = _get_mpz(b)
     e = _get_mpz(e)
-    return ElementModP(powmod(b, e, get_large_prime()))
+    return ElementModP(powmod(b, e, _LARGE_PRIME))
 
 
 def pow_q(b: ElementModQorInt, e: ElementModQorInt) -> ElementModQ:
@@ -221,7 +226,7 @@ def pow_q(b: ElementModQorInt, e: ElementModQorInt) -> ElementModQ:
     """
     b = _get_mpz(b)
     e = _get_mpz(e)
-    return ElementModQ(powmod(b, e, get_small_prime()))
+    return ElementModQ(powmod(b, e, _SMALL_PRIME))
 
 
 def mult_p(*elems: ElementModPOrQorInt) -> ElementModP:
@@ -233,7 +238,7 @@ def mult_p(*elems: ElementModPOrQorInt) -> ElementModP:
     product = _get_mpz(1)
     for x in elems:
         x = _get_mpz(x)
-        product = (product * x) % get_large_prime()
+        product = (product * x) % _LARGE_PRIME
     return ElementModP(product)
 
 
@@ -246,7 +251,7 @@ def mult_q(*elems: ElementModPOrQorInt) -> ElementModQ:
     product = _get_mpz(1)
     for x in elems:
         x = _get_mpz(x)
-        product = (product * x) % get_small_prime()
+        product = (product * x) % _SMALL_PRIME
     return ElementModQ(product)
 
 
@@ -256,7 +261,8 @@ def g_pow_p(e: ElementModPOrQorInt) -> ElementModP:
 
     :param e: An element in [0,P).
     """
-    return pow_p(get_generator(), e)
+    e = _get_mpz(e)
+    return ElementModP(powmod(_GENERATOR, e, _LARGE_PRIME))
 
 
 def rand_q() -> ElementModQ:

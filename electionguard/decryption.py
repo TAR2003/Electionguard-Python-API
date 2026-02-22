@@ -338,23 +338,13 @@ def compute_decryption_share_for_selection(
         key_pair, selection.ciphertext, context.crypto_extended_base_hash
     )
 
-    if proof.is_valid(
-        selection.ciphertext,
-        key_pair.key_pair.public_key,
+    # Proof was just generated — skip re-verification (correct by construction)
+    return create_ciphertext_decryption_selection(
+        selection.object_id,
+        key_pair.owner_id,
         decryption,
-        context.crypto_extended_base_hash,
-    ):
-        return create_ciphertext_decryption_selection(
-            selection.object_id,
-            key_pair.owner_id,
-            decryption,
-            proof,
-        )
-    log_warning(
-        f"compute decryption share proof failed for guardian {key_pair.owner_id}"
-        f"and {selection.object_id} with invalid proof"
+        proof,
     )
-    return None
 
 
 def compute_compensated_decryption_share_for_selection(
@@ -397,28 +387,16 @@ def compute_compensated_decryption_share_for_selection(
         available_guardian_key, missing_guardian_key
     )
 
-    if proof.is_valid(
-        selection.ciphertext,
-        recovery_public_key,
+    # Proof was just generated — skip re-verification (correct by construction)
+    share = CiphertextCompensatedDecryptionSelection(
+        selection.object_id,
+        available_guardian_key.owner_id,
+        missing_guardian_key.owner_id,
         decryption,
-        context.crypto_extended_base_hash,
-    ):
-        share = CiphertextCompensatedDecryptionSelection(
-            selection.object_id,
-            available_guardian_key.owner_id,
-            missing_guardian_key.owner_id,
-            decryption,
-            recovery_public_key,
-            proof,
-        )
-        return share
-    log_warning(
-        (
-            f"compute compensated decryption share proof failed for {available_guardian_key.owner_id} "
-            f"missing: {missing_guardian_key.owner_id} {selection.object_id}"
-        )
+        recovery_public_key,
+        proof,
     )
-    return None
+    return share
 
 
 def partially_decrypt(

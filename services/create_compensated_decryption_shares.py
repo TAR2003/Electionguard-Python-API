@@ -21,6 +21,7 @@ from electionguard.ballot import (
     SubmittedBallot,
 )
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import to_binary_transport, from_binary_transport, from_binary_transport_to_dict
 from electionguard.constants import get_constants
 from electionguard.data_store import DataStore
 from electionguard.decryption_mediator import DecryptionMediator
@@ -74,6 +75,7 @@ from electionguard.decryption import (
     decrypt_backup,
     compute_lagrange_coefficients_for_guardians as compute_lagrange_coeffs
 )
+from manifest_cache import get_manifest_cache
 
 
 def compute_compensated_ballot_shares(
@@ -83,17 +85,24 @@ def compute_compensated_ballot_shares(
     ballots: List[SubmittedBallot],
     context: CiphertextElectionContext
 ) -> Dict[BallotId, Optional[CompensatedDecryptionShare]]:
-    """Compute compensated decryption shares for ballots."""
+    """Compute compensated decryption shares for ballots.
+    
+    Only computes shares for SPOILED ballots — CAST ballot shares are never
+    used in tally decryption (only spoiled ballots are individually decrypted).
+    """
+    from electionguard.ballot import BallotBoxState
     shares = {}
     for ballot in ballots:
-        share = compute_compensated_decryption_share_for_ballot(
-            missing_guardian_coordinate,
-            missing_guardian_key,
-            present_guardian_key,
-            ballot,
-            context,
-        )
-        shares[ballot.object_id] = share
+        if ballot.state == BallotBoxState.SPOILED:
+            share = compute_compensated_decryption_share_for_ballot(
+                missing_guardian_coordinate,
+                missing_guardian_key,
+                present_guardian_key,
+                ballot,
+                context,
+            )
+            shares[ballot.object_id] = share
+        # CAST ballots: skip — their individual decryption is never needed
     return shares
 
 
@@ -155,26 +164,29 @@ def create_compensated_decryption_service(
     if not backup_data:
         raise ValueError(f"No backup found for missing guardian {missing_guardian_id} in available guardian {available_guardian_id}")
     
-    # Create election public keys
-    # Handle election_public_key data - check if it's already a dict or needs JSON parsing
+    # Create election public keys - binary deserialization
+    # Handle election_public_key data
     available_election_public_key_data = available_guardian_data['election_public_key']
     if isinstance(available_election_public_key_data, dict):
         available_guardian_public_key = from_raw(ElectionPublicKey, json.dumps(available_election_public_key_data))
     else:
-        available_guardian_public_key = from_raw(ElectionPublicKey, available_election_public_key_data)
+        # Binary deserialization (base64)
+        available_guardian_public_key = from_binary_transport(ElectionPublicKey, available_election_public_key_data)
         
     missing_election_public_key_data = missing_guardian_data['election_public_key']
     if isinstance(missing_election_public_key_data, dict):
         missing_guardian_public_key = from_raw(ElectionPublicKey, json.dumps(missing_election_public_key_data))
     else:
-        missing_guardian_public_key = from_raw(ElectionPublicKey, missing_election_public_key_data)
+        # Binary deserialization (base64)
+        missing_guardian_public_key = from_binary_transport(ElectionPublicKey, missing_election_public_key_data)
     
-    # Decrypt the backup to get the coordinate
-    # Handle backup data - check if it's already a dict or needs JSON parsing
+    # Decrypt the backup to get the coordinate - binary deserialization
+    # Handle backup data
     if isinstance(backup_data, dict):
         backup = from_raw(ElectionPartialKeyBackup, json.dumps(backup_data))
     else:
-        backup = from_raw(ElectionPartialKeyBackup, backup_data)
+        # Binary deserialization (base64)
+        backup = from_binary_transport(ElectionPartialKeyBackup, backup_data)
     
     # Find the private key and polynomial for the available guardian
     available_private_key_info = available_private_key
@@ -194,14 +206,14 @@ def create_compensated_decryption_service(
     
     available_public_key_element = int_to_p(int(available_public_key_info['public_key']))
     
-    # Handle polynomial data - check if it's already a dict or needs JSON parsing
+    # Handle polynomial data - binary deserialization
     polynomial_data = available_polynomial_info['polynomial']
     if isinstance(polynomial_data, dict):
         # Already deserialized, convert back to JSON string for from_raw
         available_polynomial = from_raw(ElectionPolynomial, json.dumps(polynomial_data))
     else:
-        # It's a JSON string, use directly
-        available_polynomial = from_raw(ElectionPolynomial, polynomial_data)
+        # Binary deserialization (base64)
+        available_polynomial = from_binary_transport(ElectionPolynomial, polynomial_data)
     
     available_election_key = ElectionKeyPair(
         owner_id=available_guardian_id,
@@ -215,29 +227,25 @@ def create_compensated_decryption_service(
     if not missing_guardian_coordinate:
         raise ValueError(f"Failed to decrypt backup for missing guardian {missing_guardian_id}")
     
-    manifest = create_election_manifest_func(party_names, candidate_names)
-    
-    election_builder = ElectionBuilder(
-        number_of_guardians=number_of_guardians,
-        quorum=quorum,
-        manifest=manifest
+    # Use cache to avoid expensive manifest/context recreation
+    cache = get_manifest_cache()
+    internal_manifest, context = cache.get_or_create_context(
+        party_names, candidate_names,
+        joint_public_key_int, commitment_hash_int,
+        number_of_guardians, quorum,
+        create_election_manifest_func
     )
+    # InternalManifest stores manifest only in __post_init__ (InitVar), not as attribute.
+    manifest = cache.get_or_create_manifest(party_names, candidate_names, create_election_manifest_func)
     
-    # Set election parameters
-    joint_public_key_element = int_to_p(joint_public_key_int)
-    commitment_hash_element = int_to_q(commitment_hash_int)
-    election_builder.set_public_key(joint_public_key_element)
-    election_builder.set_commitment_hash(commitment_hash_element)
-        
-    # Build the election context
-    internal_manifest, context = get_optional(election_builder.build())
     ciphertext_tally = raw_to_ciphertext_tally_func(ciphertext_tally_json, manifest=manifest)
     submitted_ballots = []
     for ballot_json in submitted_ballots_json:
         if isinstance(ballot_json, dict):
             submitted_ballots.append(from_raw(SubmittedBallot, json.dumps(ballot_json)))
         else:
-            submitted_ballots.append(from_raw(SubmittedBallot, ballot_json))
+            # Binary deserialization (base64)
+            submitted_ballots.append(from_binary_transport(SubmittedBallot, ballot_json))
 
     # Compute compensated shares
     compensated_tally_share = compute_compensated_decryption_share(
@@ -256,11 +264,11 @@ def create_compensated_decryption_service(
         context
     )
     
-    # Serialize each component
-    serialized_tally_share = to_raw(compensated_tally_share) if compensated_tally_share else None
+    # Serialize each component using binary serialization (FAST)
+    serialized_tally_share = to_binary_transport(compensated_tally_share) if compensated_tally_share else None
     serialized_ballot_shares = {}
     for ballot_id, ballot_share in compensated_ballot_shares.items():
-        serialized_ballot_shares[ballot_id] = to_raw(ballot_share) if ballot_share else None
+        serialized_ballot_shares[ballot_id] = to_binary_transport(ballot_share) if ballot_share else None
     
     return {
         'compensated_tally_share': serialized_tally_share,

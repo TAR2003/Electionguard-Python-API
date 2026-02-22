@@ -21,6 +21,7 @@ from electionguard.ballot import (
     SubmittedBallot,
 )
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import to_binary_transport, from_binary_transport, from_binary_transport_to_dict
 from electionguard.constants import get_constants
 from electionguard.data_store import DataStore
 from electionguard.decryption_mediator import DecryptionMediator
@@ -74,6 +75,7 @@ from electionguard.decryption import (
     decrypt_backup,
     compute_lagrange_coefficients_for_guardians as compute_lagrange_coeffs
 )
+from manifest_cache import get_manifest_cache
 
 
 
@@ -122,20 +124,17 @@ def combine_decryption_shares_service(
     joint_public_key_int = int(joint_public_key)
     commitment_hash_int = int(commitment_hash)
     
-    # Build election context
-    manifest = create_election_manifest_func(party_names, candidate_names)
+    # Use cache to avoid expensive manifest/context recreation
     number_of_guardians = len(guardian_data)
-    
-    election_builder = ElectionBuilder(
-        number_of_guardians=number_of_guardians,
-        quorum=quorum,
-        manifest=manifest
+    cache = get_manifest_cache()
+    internal_manifest, context = cache.get_or_create_context(
+        party_names, candidate_names,
+        joint_public_key_int, commitment_hash_int,
+        number_of_guardians, quorum,
+        create_election_manifest_func
     )
-    joint_public_key_element = int_to_p(joint_public_key_int)
-    commitment_hash_element = int_to_q(commitment_hash_int)
-    election_builder.set_public_key(joint_public_key_element)
-    election_builder.set_commitment_hash(commitment_hash_element)
-    internal_manifest, context = get_optional(election_builder.build())
+    # InternalManifest stores manifest only in __post_init__ (InitVar), not as attribute.
+    manifest = cache.get_or_create_manifest(party_names, candidate_names, create_election_manifest_func)
     
     # Process ciphertext tally and ballots
     ciphertext_tally = raw_to_ciphertext_tally_func(ciphertext_tally_json, manifest=manifest)
@@ -144,35 +143,39 @@ def combine_decryption_shares_service(
         if isinstance(ballot_json, dict):
             submitted_ballots.append(from_raw(SubmittedBallot, json.dumps(ballot_json)))
         else:
-            submitted_ballots.append(from_raw(SubmittedBallot, ballot_json))
+            # Binary deserialization (base64)
+            submitted_ballots.append(from_binary_transport(SubmittedBallot, ballot_json))
     
     # Configure decryption mediator
     decryption_mediator = DecryptionMediator("decryption-mediator", context)
     
-    # First, get all guardian keys from guardian data
+    # First, get all guardian keys from guardian data - binary deserialization
     all_guardian_keys = []
     for guardian_info in guardian_data:
         election_public_key_data = guardian_info['election_public_key']
         if isinstance(election_public_key_data, dict):
             election_public_key = from_raw(ElectionPublicKey, json.dumps(election_public_key_data))
         else:
-            election_public_key = from_raw(ElectionPublicKey, election_public_key_data)
+            # Binary deserialization (base64)
+            election_public_key = from_binary_transport(ElectionPublicKey, election_public_key_data)
         all_guardian_keys.append(election_public_key)
     
-    # Add available guardian shares (normal decryption shares)
+    # Add available guardian shares (normal decryption shares) - binary deserialization
     for guardian_id, share_data in available_guardian_shares.items():
         guardian_public_key_data = share_data['guardian_public_key']
         if isinstance(guardian_public_key_data, dict):
             guardian_public_key = from_raw(ElectionPublicKey, json.dumps(guardian_public_key_data))
         else:
-            guardian_public_key = from_raw(ElectionPublicKey, guardian_public_key_data)
+            # Binary deserialization (base64)
+            guardian_public_key = from_binary_transport(ElectionPublicKey, guardian_public_key_data)
             
         tally_share_data = share_data['tally_share']
         if tally_share_data:
             if isinstance(tally_share_data, dict):
                 tally_share = from_raw(DecryptionShare, json.dumps(tally_share_data))
             else:
-                tally_share = from_raw(DecryptionShare, tally_share_data)
+                # Binary deserialization (base64)
+                tally_share = from_binary_transport(DecryptionShare, tally_share_data)
         else:
             tally_share = None
         
@@ -182,11 +185,12 @@ def combine_decryption_shares_service(
                 if isinstance(serialized_ballot_share, dict):
                     ballot_shares[ballot_id] = from_raw(DecryptionShare, json.dumps(serialized_ballot_share))
                 else:
-                    ballot_shares[ballot_id] = from_raw(DecryptionShare, serialized_ballot_share)
+                    # Binary deserialization (base64)
+                    ballot_shares[ballot_id] = from_binary_transport(DecryptionShare, serialized_ballot_share)
         
         decryption_mediator.announce(guardian_public_key, tally_share, ballot_shares)
     
-    # Announce missing guardians
+    # Announce missing guardians - binary deserialization
     print(f"Processing compensated shares for {len(compensated_shares)} guardians")
     for missing_guardian_id in compensated_shares.keys():
         missing_guardian_info = next((gd for gd in guardian_data if gd['id'] == missing_guardian_id), None)
@@ -195,11 +199,12 @@ def combine_decryption_shares_service(
             if isinstance(missing_guardian_public_key_data, dict):
                 missing_guardian_public_key = from_raw(ElectionPublicKey, json.dumps(missing_guardian_public_key_data))
             else:
-                missing_guardian_public_key = from_raw(ElectionPublicKey, missing_guardian_public_key_data)
+                # Binary deserialization (base64)
+                missing_guardian_public_key = from_binary_transport(ElectionPublicKey, missing_guardian_public_key_data)
             decryption_mediator.announce_missing(missing_guardian_public_key)
             print(f"Announced missing guardian: {missing_guardian_id}")
     
-    # Add compensated shares for missing guardians
+    # Add compensated shares for missing guardians - binary deserialization
     print(f"Processing compensated shares data...")
     for missing_guardian_id, compensated_data in compensated_shares.items():
         print(f"Processing compensated shares for missing guardian: {missing_guardian_id}")
@@ -210,7 +215,8 @@ def combine_decryption_shares_service(
                 if isinstance(compensated_tally_share_data, dict):
                     compensated_tally_share = from_raw(CompensatedDecryptionShare, json.dumps(compensated_tally_share_data))
                 else:
-                    compensated_tally_share = from_raw(CompensatedDecryptionShare, compensated_tally_share_data)
+                    # Binary deserialization (base64)
+                    compensated_tally_share = from_binary_transport(CompensatedDecryptionShare, compensated_tally_share_data)
                 decryption_mediator.receive_tally_compensation_share(compensated_tally_share)
                 print(f"    ✅ Added compensated tally share")
             
@@ -221,7 +227,8 @@ def combine_decryption_shares_service(
                         if isinstance(serialized_comp_ballot_share, dict):
                             compensated_ballot_shares[ballot_id] = from_raw(CompensatedDecryptionShare, json.dumps(serialized_comp_ballot_share))
                         else:
-                            compensated_ballot_shares[ballot_id] = from_raw(CompensatedDecryptionShare, serialized_comp_ballot_share)
+                            # Binary deserialization (base64)
+                            compensated_ballot_shares[ballot_id] = from_binary_transport(CompensatedDecryptionShare, serialized_comp_ballot_share)
                 
                 decryption_mediator.receive_ballot_compensation_shares(compensated_ballot_shares)
                 print(f"    ✅ Added {len(compensated_ballot_shares)} compensated ballot shares")
@@ -363,13 +370,14 @@ def combine_decryption_shares_service(
         
         results['verification']['ballots'].append(ballot_info)
     
-    # Add guardian information
+    # Add guardian information - binary deserialization
     for guardian_id, share_data in available_guardian_shares.items():
         guardian_public_key_data = share_data['guardian_public_key']
         if isinstance(guardian_public_key_data, dict):
             guardian_public_key = from_raw(ElectionPublicKey, json.dumps(guardian_public_key_data))
         else:
-            guardian_public_key = from_raw(ElectionPublicKey, guardian_public_key_data)
+            # Binary deserialization (base64)
+            guardian_public_key = from_binary_transport(ElectionPublicKey, guardian_public_key_data)
         results['verification']['guardians'].append({
             'id': guardian_public_key.owner_id,
             'sequence_order': str(guardian_public_key.sequence_order),
@@ -377,7 +385,7 @@ def combine_decryption_shares_service(
             'status': 'available'
         })
     
-    # Add missing guardian information
+    # Add missing guardian information - binary deserialization
     for missing_guardian_id in compensated_shares.keys():
         guardian_info = next((gd for gd in guardian_data if gd['id'] == missing_guardian_id), None)
         if guardian_info:
@@ -386,7 +394,8 @@ def combine_decryption_shares_service(
             if isinstance(missing_guardian_public_key_data, dict):
                 missing_guardian_public_key = from_raw(ElectionPublicKey, json.dumps(missing_guardian_public_key_data))
             else:
-                missing_guardian_public_key = from_raw(ElectionPublicKey, missing_guardian_public_key_data)
+                # Binary deserialization (base64)
+                missing_guardian_public_key = from_binary_transport(ElectionPublicKey, missing_guardian_public_key_data)
             results['verification']['guardians'].append({
                 'id': missing_guardian_id,
                 'sequence_order': str(guardian_info['sequence_order']),

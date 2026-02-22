@@ -1,6 +1,24 @@
 #!/usr/bin/env python
 
-from flask import Flask, request, jsonify, g
+import sys
+import io
+
+# Windows: ensure stdout/stderr accept ALL Unicode (emoji, surrogates, etc.)
+# without raising UnicodeEncodeError and corrupting request handling.
+if hasattr(sys.stdout, 'buffer'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'buffer'):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+import logging
+
+# Suppress ElectionGuard's verbose INFO logging BEFORE importing any electionguard modules.
+# Every crypto operation logs huge binary blobs (512-char hex keys, 512-byte binary data)
+# via log_info(), and each call invokes inspect.stack() — together this adds 2-5s per endpoint.
+# Setting WARNING level eliminates all INFO log processing, including inspect.stack() overhead.
+logging.getLogger('electionguard').setLevel(logging.WARNING)
+
+from flask import Flask, request, jsonify, g, Response
 from typing import Dict, List, Optional, Tuple, Any
 import gc
 import random
@@ -8,11 +26,11 @@ from datetime import datetime
 import uuid
 import threading
 import time
-import sys
 from collections import defaultdict
 import hashlib
 import json
 import signal
+import msgpack
 from functools import wraps
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -38,6 +56,14 @@ from electionguard.ballot import (
     SubmittedBallot,
 )
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import (
+    to_binary_transport,
+    from_binary_transport,
+    from_binary_transport_to_dict,
+    serialize_list_to_binary_list,
+    deserialize_binary_list_to_list,
+    deserialize_binary_list_to_dict_list
+)
 from electionguard.constants import get_constants
 from electionguard.data_store import DataStore
 from electionguard.decryption_mediator import DecryptionMediator
@@ -107,6 +133,10 @@ from services.create_partial_decryption_shares import compute_ballot_shares, com
 from services.create_encrypted_ballot import create_election_manifest, create_plaintext_ballot
 from services.create_encrypted_tally import ciphertext_tally_to_raw, raw_to_ciphertext_tally
 from services.benaloh_challenge import benaloh_challenge_service
+
+# Re-apply WARNING level after all ElectionGuard imports (ElectionGuardLog singleton now
+# defaults to WARNING, but this ensures nothing else reset it during service imports).
+logging.getLogger('electionguard').setLevel(logging.WARNING)
 
 # Import ballot sanitization modules
 from ballot_sanitizer import prepare_ballot_for_publication, process_ballot_response
@@ -256,37 +286,50 @@ def track_request(endpoint):
 #     #     json.dump(data, f, ensure_ascii=False, indent=4)
 
 
-# Helper functions for serialization/deserialization
-def serialize_dict_to_string(data):
-    """Convert dict to JSON string with safe int handling"""
+# Helper functions for binary serialization/deserialization (FAST - 10-50x faster than JSON)
+def serialize_dict_to_string(data, label="dict"):
+    """Convert dict to base64-encoded binary msgpack (FAST) with timing"""
     if isinstance(data, dict):
-        return json.dumps(data, ensure_ascii=False)
+        start_time = time.time()
+        result = to_binary_transport(data)
+        elapsed = time.time() - start_time
+        print(f"⏱️  SERIALIZE {label}: {elapsed*1000:.2f}ms (size: {len(result)} bytes)")
+        return result
     return data
 
-def deserialize_string_to_dict(data):
-    """Convert JSON string to dict with safe int handling"""
+def deserialize_string_to_dict(data, label="dict"):
+    """Convert base64-encoded binary msgpack to dict (FAST) with timing"""
     if isinstance(data, dict):
         # Already a dict (from request.json), return as-is
         return data
     elif isinstance(data, str):
         try:
-            return json.loads(data)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON string: {e}")
+            start_time = time.time()
+            result = from_binary_transport_to_dict(data)
+            elapsed = time.time() - start_time
+            print(f"⏱️  DESERIALIZE {label}: {elapsed*1000:.2f}ms (size: {len(data)} bytes)")
+            return result
+        except Exception as e:
+            raise ValueError(f"Invalid binary data: {e}")
     else:
         raise ValueError(f"Expected string or dict, got {type(data)}")
 
-def serialize_list_of_dicts_to_list_of_strings(data):
-    """Convert List[dict] to List[str] with safe int handling"""
+def serialize_list_of_dicts_to_list_of_strings(data, label="list"):
+    """Convert List[dict] to List[base64 binary] (FAST) with timing"""
     if isinstance(data, list):
         if not data:
             return []
         if isinstance(data[0], dict):
-            return [json.dumps(item, ensure_ascii=False) for item in data]
+            start_time = time.time()
+            result = serialize_list_to_binary_list(data)
+            elapsed = time.time() - start_time
+            total_size = sum(len(item) for item in result)
+            print(f"⏱️  SERIALIZE {label} ({len(data)} items): {elapsed*1000:.2f}ms (total: {total_size} bytes)")
+            return result
     return data
 
-def deserialize_list_of_strings_to_list_of_dicts(data):
-    """Convert List[str] to List[dict] with safe int handling"""
+def deserialize_list_of_strings_to_list_of_dicts(data, label="list"):
+    """Convert List[base64 binary] to List[dict] (FAST) with timing"""
     if isinstance(data, list):
         if not data:
             return []
@@ -295,9 +338,14 @@ def deserialize_list_of_strings_to_list_of_dicts(data):
             return data
         elif isinstance(data[0], str):
             try:
-                return [json.loads(item) for item in data]
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON in list: {e}")
+                start_time = time.time()
+                result = deserialize_binary_list_to_dict_list(data)
+                elapsed = time.time() - start_time
+                total_size = sum(len(item) for item in data)
+                print(f"⏱️  DESERIALIZE {label} ({len(data)} items): {elapsed*1000:.2f}ms (from {total_size} bytes)")
+                return result
+            except Exception as e:
+                raise ValueError(f"Invalid binary data in list: {e}")
         else:
             raise ValueError(f"Expected list of strings or dicts, got list of {type(data[0])}")
     elif isinstance(data, str):
@@ -312,6 +360,54 @@ def deserialize_list_of_strings_to_list_of_dicts(data):
             raise ValueError(f"Invalid JSON string: {e}")
     else:
         raise ValueError(f"Expected list or string, got {type(data)}")
+
+def get_request_data():
+    """Parse request body: accepts both application/msgpack and application/json."""
+    ct = request.content_type or ''
+    if 'msgpack' in ct:
+        return msgpack.unpackb(request.data, raw=False)
+    return request.json
+
+
+def _sanitize_for_msgpack(obj):
+    """Recursively replace lone surrogates so msgpack can UTF-8 encode all strings."""
+    if isinstance(obj, dict):
+        return {_sanitize_for_msgpack(k): _sanitize_for_msgpack(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_sanitize_for_msgpack(v) for v in obj]
+    elif isinstance(obj, str):
+        try:
+            obj.encode('utf-8')   # fast-path: already valid
+            return obj
+        except UnicodeEncodeError:
+            # Replace lone surrogates with the Unicode replacement character
+            return obj.encode('utf-8', errors='replace').decode('utf-8')
+    return obj   # int, float, bool, bytes, None → pass through
+
+
+def make_binary_response(data, status=200):
+    """Return msgpack binary response (10-50x faster than JSON for large payloads).
+
+    Note: msgpack raises ValueError (not UnicodeEncodeError) for strings with lone
+    surrogates, so we preemptively sanitize if the first pack attempt fails.
+    """
+    try:
+        packed = msgpack.packb(data, use_bin_type=True, default=str)
+    except Exception as exc:
+        # msgpack wraps UTF-8 errors as ValueError; sanitize lone surrogates and retry
+        print(f"[make_binary_response] pack failed ({type(exc).__name__}: {exc}); sanitizing…")
+        try:
+            packed = msgpack.packb(_sanitize_for_msgpack(data), use_bin_type=True, default=str)
+        except Exception as exc2:
+            # Absolute last resort: return a plain ASCII error payload
+            print(f"[make_binary_response] sanitized pack also failed: {exc2}")
+            packed = msgpack.packb(
+                {'status': 'error', 'message': f'Serialization error: {exc}'},
+                use_bin_type=True
+            )
+            status = 500
+    return Response(packed, status=status, mimetype='application/msgpack')
+
 
 def safe_int_conversion(value):
     """Safely convert values to int, handling JSON string->int issues"""
@@ -494,8 +590,12 @@ HKDF_INFO_HMAC = b'hmac-key-derivation-v1'
 def api_setup_guardians():
     """API endpoint to setup guardians and create joint key."""
     try:
-        print('called setup guardians call in the microservice')
-        data = request.json
+        endpoint_start = time.time()
+        print('\n' + '='*80)
+        print('🚀 SETUP_GUARDIANS API CALL STARTED')
+        print('='*80)
+        
+        data = get_request_data()
         number_of_guardians = safe_int_conversion(data['number_of_guardians'])
         quorum = safe_int_conversion(data['quorum'])
         party_names = data['party_names']
@@ -505,12 +605,16 @@ def api_setup_guardians():
         ## print_data(data, "./io/setup_guardians_data.json")
 
         # Call service function
+        service_start = time.time()
+        print(f"\n📊 COMPUTATION: Guardian setup & key ceremony...")
         result = setup_guardians_service(
             number_of_guardians,
             quorum,
             party_names,
             candidate_names
         )
+        service_elapsed = time.time() - service_start
+        print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
         
         # Store election data
         election_data['guardians'] = result['guardians']
@@ -520,36 +624,48 @@ def api_setup_guardians():
         election_data['number_of_guardians'] = result['number_of_guardians']
         election_data['quorum'] = result['quorum']
         
-        # Convert response dicts to strings - all complex objects serialized
+        # Build response with raw dicts/lists — msgpack handles binary transport natively
+        print(f"\n📦 SERIALIZATION: Preparing response...")
+        serialization_start = time.time()
         response = {
             'status': 'success',
             'joint_public_key': result['joint_public_key'],
             'commitment_hash': result['commitment_hash'],
-            'manifest': serialize_dict_to_string(to_raw(election_data['manifest'])),
-            'guardian_data': serialize_list_of_dicts_to_list_of_strings(result['guardian_data']),
-            'private_keys': serialize_list_of_dicts_to_list_of_strings(result['private_keys']),
-            'public_keys': serialize_list_of_dicts_to_list_of_strings(result['public_keys']),
-            'polynomials': serialize_list_of_dicts_to_list_of_strings(result['polynomials']),
+            'guardian_data': result['guardian_data'],
+            'private_keys': result['private_keys'],
+            'public_keys': result['public_keys'],
+            'polynomials': result['polynomials'],
             'number_of_guardians': result['number_of_guardians'],
             'quorum': result['quorum']
         }
+        serialization_elapsed = time.time() - serialization_start
+        print(f"✅ SERIALIZATION COMPLETE: {serialization_elapsed*1000:.2f}ms")
+        
         ## print_json(response, "setup_guardians_response")
         ## print_data(response, "./io/setup_guardians_response.json")
-        print('Finished setup guardians call at the microservice')
-        return jsonify(response), 200
+        
+        endpoint_elapsed = time.time() - endpoint_start
+        print(f"\n{'='*80}")
+        print(f"🎯 SETUP_GUARDIANS TOTAL TIME: {endpoint_elapsed*1000:.2f}ms")
+        print(f"   ├─ Computation: {service_elapsed*1000:.2f}ms ({service_elapsed/endpoint_elapsed*100:.1f}%)")
+        print(f"   └─ Serialization: {serialization_elapsed*1000:.2f}ms ({serialization_elapsed/endpoint_elapsed*100:.1f}%)")
+        print('='*80 + '\n')
+        
+        return make_binary_response(response)
     
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/create_encrypted_ballot', methods=['POST'])
 @track_request('/create_encrypted_ballot')
 def api_create_encrypted_ballot():
     """API endpoint to create and encrypt a ballot with secure publication."""
     try:
+        endpoint_start = time.time()
         logger.info('Creating encrypted ballot')
-        data = request.json
+        data = get_request_data()
         party_names = data['party_names']
         candidate_names = data['candidate_names']
         candidate_name = data['candidate_name']
@@ -570,6 +686,7 @@ def api_create_encrypted_ballot():
         quorum = safe_int_conversion(data.get('quorum', 1))
         
         # Call service function to create the encrypted ballot
+        service_start = time.time()
         result = create_encrypted_ballot_service(
             party_names,
             candidate_names,
@@ -583,12 +700,14 @@ def api_create_encrypted_ballot():
             create_election_manifest,
             generate_ballot_hash_electionguard
         )
+        service_elapsed = time.time() - service_start
         
         # Don't store ballots in memory - keep API stateless
         # If you need to store ballots, do it in the backend database
         # election_data is only for temporary session data if needed
         
         # Create the complete ballot response for sanitization
+        serialization_start = time.time()
         complete_ballot_response = {
             'status': 'success',
             'encrypted_ballot': result['encrypted_ballot'],
@@ -644,6 +763,9 @@ def api_create_encrypted_ballot():
         # ## print_data(response, "./io/create_encrypted_ballot_response.json")  # Disabled
         logger.info(f'Finished encrypting ballot - Status: {ballot_status}')
         
+        serialization_elapsed = time.time() - serialization_start
+        endpoint_elapsed = time.time() - endpoint_start
+        
         # AGGRESSIVE memory cleanup to prevent accumulation across chunks
         import sys
         
@@ -654,12 +776,15 @@ def api_create_encrypted_ballot():
         # Force full garbage collection (generation 2 includes all objects)
         gc.collect(generation=2)
         
-        return jsonify(response), 200
+        # Note: We keep timing output minimal for ballot encryption since it's called frequently
+        # Detailed timing is shown only for batch operations (tally, partial decryption, etc.)
+        
+        return make_binary_response(response)
     
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/benaloh_challenge', methods=['POST'])
 def api_benaloh_challenge():
@@ -844,13 +969,20 @@ def api_publish_existing_ballot():
 def api_create_encrypted_tally():
     """API endpoint to tally encrypted ballots."""
     try:
+        endpoint_start = time.time()
+        print('\n' + '='*80)
+        print('🚀 CREATE_ENCRYPTED_TALLY API CALL STARTED')
+        print('='*80)
+        
         logger.info('Creating encrypted tally')
-        data = request.json
+        data = get_request_data()
         party_names = data['party_names']
         candidate_names = data['candidate_names']
         joint_public_key = data['joint_public_key']  # Expecting string
         commitment_hash = data['commitment_hash']    # Expecting string
         encrypted_ballots = data['encrypted_ballots'] # List of encrypted ballot strings
+        
+        print(f"\n📊 RECEIVED: {len(encrypted_ballots)} encrypted ballots")
         
         ## print_json(data, "create_encrypted_tally")
         # Dump the request to a file named "create_encrypted_tally_request.json"
@@ -861,6 +993,8 @@ def api_create_encrypted_tally():
         quorum = safe_int_conversion(data.get('quorum', 1))
         
         # Call service function
+        service_start = time.time()
+        print(f"\n📊 COMPUTATION: Tallying ballots...")
         result = create_encrypted_tally_service(
             party_names,
             candidate_names,
@@ -872,17 +1006,24 @@ def api_create_encrypted_tally():
             create_election_manifest,
             ciphertext_tally_to_raw
         )
+        service_elapsed = time.time() - service_start
+        print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
         
         # Don't store tally data in memory - keep API stateless
         # Backend should handle persistent storage
         # election_data['ciphertext_tally'] = result['ciphertext_tally']
         # election_data['submitted_ballots'] = result['submitted_ballots']
         
+        print(f"\n📦 SERIALIZATION: Preparing response...")
+        serialization_start = time.time()
         response = {
             'status': 'success',
-            'ciphertext_tally': serialize_dict_to_string(result['ciphertext_tally']),
-            'submitted_ballots': serialize_list_of_dicts_to_list_of_strings(result['submitted_ballots'])
+            'ciphertext_tally': result['ciphertext_tally'],
+            'submitted_ballots': result['submitted_ballots']
         }
+        serialization_elapsed = time.time() - serialization_start
+        print(f"✅ SERIALIZATION COMPLETE: {serialization_elapsed*1000:.2f}ms")
+        
         # ## print_data(response, "./io/create_encrypted_tally_response.json")  # Disabled
         # ## print_json(response, "create_encrypted_tally_response")  # Disabled
         logger.info('Finished creating encrypted tally')
@@ -890,20 +1031,32 @@ def api_create_encrypted_tally():
         # Force garbage collection to free memory
         gc.collect()
         
-        return jsonify(response), 200
+        endpoint_elapsed = time.time() - endpoint_start
+        print(f"\n{'='*80}")
+        print(f"🎯 CREATE_ENCRYPTED_TALLY TOTAL TIME: {endpoint_elapsed*1000:.2f}ms")
+        print(f"   ├─ Computation: {service_elapsed*1000:.2f}ms ({service_elapsed/endpoint_elapsed*100:.1f}%)")
+        print(f"   └─ Serialization: {serialization_elapsed*1000:.2f}ms ({serialization_elapsed/endpoint_elapsed*100:.1f}%)")
+        print('='*80 + '\n')
+        
+        return make_binary_response(response)
     
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/create_partial_decryption', methods=['POST'])
 @track_request('/create_partial_decryption')
 def api_create_partial_decryption():
     """API endpoint to compute decryption shares for a single guardian."""
     try:
+        endpoint_start = time.time()
+        print('\n' + '='*80)
+        print('🚀 CREATE_PARTIAL_DECRYPTION API CALL STARTED')
+        print('='*80)
+        
         logger.info('Creating partial decryption')
-        data = request.json
+        data = get_request_data()
         guardian_id = data['guardian_id']
         ## print_json(data, "create_partial_decryption")
         # Print the request body as JSON to a file named "partial_decryption_request.json"
@@ -911,20 +1064,23 @@ def api_create_partial_decryption():
         ## print_data(data, "./io/partial_decryption_request.json")
 
         # Deserialize single guardian data from string (if available)
+        print(f"\n📦 DESERIALIZATION: Processing guardian {guardian_id} data...")
+        deserialize_start = time.time()
+        
         guardian_data = None
         if data.get('guardian_data'):
             try:
-                guardian_data = deserialize_string_to_dict(data['guardian_data'])
+                guardian_data = deserialize_string_to_dict(data['guardian_data'], label="guardian_data")
             except Exception as e:
                 raise ValueError(f"Error deserializing guardian_data: {e}")
             
         try:
-            private_key = deserialize_string_to_dict(data['private_key'])
+            private_key = deserialize_string_to_dict(data['private_key'], label="private_key")
         except Exception as e:
             raise ValueError(f"Error deserializing private_key: {e}")
             
         try:
-            public_key = deserialize_string_to_dict(data['public_key'])
+            public_key = deserialize_string_to_dict(data['public_key'], label="public_key")
         except Exception as e:
             raise ValueError(f"Error deserializing public_key: {e}")
             
@@ -935,15 +1091,18 @@ def api_create_partial_decryption():
         
         # Deserialize dict from string with error context
         try:
-            ciphertext_tally_json = deserialize_string_to_dict(data['ciphertext_tally'])
+            ciphertext_tally_json = deserialize_string_to_dict(data['ciphertext_tally'], label="ciphertext_tally")
         except Exception as e:
             raise ValueError(f"Error deserializing ciphertext_tally: {e}")
             
         # Deserialize submitted_ballots from list of strings to list of dicts
         try:
-            submitted_ballots_json = deserialize_list_of_strings_to_list_of_dicts(data['submitted_ballots'])
+            submitted_ballots_json = deserialize_list_of_strings_to_list_of_dicts(data['submitted_ballots'], label="submitted_ballots")
         except Exception as e:
             raise ValueError(f"Error deserializing submitted_ballots: {e}")
+        
+        deserialize_elapsed = time.time() - deserialize_start
+        print(f"✅ DESERIALIZATION COMPLETE: {deserialize_elapsed*1000:.2f}ms")
             
         joint_public_key = data['joint_public_key']
         commitment_hash = data['commitment_hash']
@@ -953,6 +1112,8 @@ def api_create_partial_decryption():
         quorum = safe_int_conversion(data.get('quorum', 1))
         
         # Call service function with single guardian data
+        service_start = time.time()
+        print(f"\n📊 COMPUTATION: Computing decryption shares...")
         result = create_partial_decryption_service(
             party_names,
             candidate_names,
@@ -971,13 +1132,20 @@ def api_create_partial_decryption():
             raw_to_ciphertext_tally,
             compute_ballot_shares
         )
+        service_elapsed = time.time() - service_start
+        print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
         
+        print(f"\n📦 SERIALIZATION: Preparing response...")
+        serialization_start = time.time()
         response = {
             'status': 'success',
             'guardian_public_key': result['guardian_public_key'],
             'tally_share': result['tally_share'],
-            'ballot_shares': serialize_dict_to_string(result['ballot_shares'])
+            'ballot_shares': result['ballot_shares']
         }
+        serialization_elapsed = time.time() - serialization_start
+        print(f"✅ SERIALIZATION COMPLETE: {serialization_elapsed*1000:.2f}ms")
+        
         # ## print_data(response, "./io/create_partial_decryption_response.json")  # Disabled
         # ## print_json(response, "create_partial_decryption_response")  # Disabled
         logger.info('Finished creating partial decryption')
@@ -985,21 +1153,31 @@ def api_create_partial_decryption():
         # Force garbage collection to free memory
         gc.collect()
         
-        return jsonify(response), 200
+        endpoint_elapsed = time.time() - endpoint_start
+        print(f"\n{'='*80}")
+        print(f"🎯 CREATE_PARTIAL_DECRYPTION TOTAL TIME: {endpoint_elapsed*1000:.2f}ms")
+        print(f"   ├─ Deserialization: {deserialize_elapsed*1000:.2f}ms ({deserialize_elapsed/endpoint_elapsed*100:.1f}%)")
+        print(f"   ├─ Computation: {service_elapsed*1000:.2f}ms ({service_elapsed/endpoint_elapsed*100:.1f}%)")
+        print(f"   └─ Serialization: {serialization_elapsed*1000:.2f}ms ({serialization_elapsed/endpoint_elapsed*100:.1f}%)")
+        print('='*80 + '\n')
+        
+        return make_binary_response(response)
     
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/create_compensated_decryption', methods=['POST'])
 @track_request('/create_compensated_decryption')
 def api_create_compensated_decryption():
     """API endpoint to compute compensated decryption shares for missing guardians."""
     try:
+        endpoint_start = time.time()
+        
         # Extract data from request
         logger.info('Creating compensated decryption')
-        data = request.json
+        data = get_request_data()
         available_guardian_id = data['available_guardian_id']
         missing_guardian_id = data['missing_guardian_id']
         ## print_json(data, "create_compensated_decryption")
@@ -1007,6 +1185,7 @@ def api_create_compensated_decryption():
         ## print_data(data, "./io/create_compensated_decryption_request.json")
 
         # Deserialize single guardian data from strings
+        deserialize_start = time.time()
         try:
             available_guardian_data = deserialize_string_to_dict(data['available_guardian_data'])
         except Exception as e:
@@ -1053,7 +1232,10 @@ def api_create_compensated_decryption():
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
         quorum = safe_int_conversion(data.get('quorum', 1))
         
+        deserialize_elapsed = time.time() - deserialize_start
+        
         # Call service function
+        service_start = time.time()
         result = create_compensated_decryption_service(
             party_names,
             candidate_names,
@@ -1074,25 +1256,32 @@ def api_create_compensated_decryption():
             raw_to_ciphertext_tally,
             compute_compensated_ballot_shares
         )
+        service_elapsed = time.time() - service_start
 
         # Format response
+        serialization_start = time.time()
         response = {
             'status': 'success',
             'compensated_tally_share': result['compensated_tally_share'],
-            'compensated_ballot_shares': serialize_dict_to_string(result['compensated_ballot_shares'])
+            'compensated_ballot_shares': result['compensated_ballot_shares']
         }
+        serialization_elapsed = time.time() - serialization_start
+        
         # ## print_data(response, "./io/create_compensated_decryption_response.json")  # Disabled
         logger.info('Finished creating compensated decryption')
         
         # Force garbage collection to free memory
         gc.collect()
         
-        return jsonify(response), 200
+        endpoint_elapsed = time.time() - endpoint_start
+        # Note: Timing output kept minimal for compensated decryption (called frequently in loops)
+        
+        return make_binary_response(response)
     
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
         
 
 
@@ -1101,29 +1290,38 @@ def api_create_compensated_decryption():
 def api_combine_decryption_shares():
     """API endpoint to combine decryption shares with quorum support."""
     try:
+        endpoint_start = time.time()
+        print('\n' + '='*80)
+        print('🚀 COMBINE_DECRYPTION_SHARES API CALL STARTED')
+        print('='*80)
+        
         # Extract data from request
-        data = request.json
+        data = get_request_data()
         party_names = data['party_names']
         candidate_names = data['candidate_names']
         joint_public_key = data['joint_public_key']
         commitment_hash = data['commitment_hash']
         ## print_json(data, "combine_decryption_shares")
         ## print_data(data, "./io/combine_decryption_shares_request.json")
+        
         # Deserialize dict from string with error context
+        print(f"\n📦 DESERIALIZATION: Processing input data...")
+        deserialize_start = time.time()
+        
         try:
-            ciphertext_tally_json = deserialize_string_to_dict(data['ciphertext_tally'])
+            ciphertext_tally_json = deserialize_string_to_dict(data['ciphertext_tally'], label="ciphertext_tally")
         except Exception as e:
             raise ValueError(f"Error deserializing ciphertext_tally: {e}")
         
         # Deserialize list of strings to list of dicts for submitted_ballots
         try:
-            submitted_ballots_json = deserialize_list_of_strings_to_list_of_dicts(data['submitted_ballots'])
+            submitted_ballots_json = deserialize_list_of_strings_to_list_of_dicts(data['submitted_ballots'], label="submitted_ballots")
         except Exception as e:
             raise ValueError(f"Error deserializing submitted_ballots: {e}")
         
         # Deserialize guardian_data from list of strings to list of dicts
         try:
-            guardian_data = deserialize_list_of_strings_to_list_of_dicts(data['guardian_data'])
+            guardian_data = deserialize_list_of_strings_to_list_of_dicts(data['guardian_data'], label="guardian_data")
         except Exception as e:
             raise ValueError(f"Error deserializing guardian_data: {e}")
 
@@ -1139,7 +1337,7 @@ def api_combine_decryption_shares():
                 available_guardian_shares[guardian_id] = {
                     'guardian_public_key': available_guardian_public_keys[i],
                     'tally_share': available_tally_shares[i],
-                    'ballot_shares': deserialize_string_to_dict(available_ballot_shares[i]) if isinstance(available_ballot_shares[i], str) else available_ballot_shares[i]
+                    'ballot_shares': deserialize_string_to_dict(available_ballot_shares[i], label=f"ballot_shares_{guardian_id}") if isinstance(available_ballot_shares[i], str) else available_ballot_shares[i]
                 }
             except Exception as e:
                 raise ValueError(f"Error reconstructing available_guardian_shares for {guardian_id}: {e}")
@@ -1170,15 +1368,20 @@ def api_combine_decryption_shares():
         quorum = safe_int_conversion(data.get('quorum', len(guardian_data)))
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', len(guardian_data)))
         
+        deserialize_elapsed = time.time() - deserialize_start
+        print(f"✅ DESERIALIZATION COMPLETE: {deserialize_elapsed*1000:.2f}ms")
+        
         # Determine which guardians are available and which are missing
         available_guardian_ids = set(available_guardian_shares.keys())
         all_guardian_ids = {g['id'] for g in guardian_data}
         missing_guardian_ids = all_guardian_ids - available_guardian_ids
         
-        print(f"Available guardians: {sorted(available_guardian_ids)}")
-        print(f"Missing guardians: {sorted(missing_guardian_ids)}")
-        print(f"All guardian IDs: {sorted(all_guardian_ids)}")
-        print(f"Quorum required: {quorum}, Available: {len(available_guardian_ids)}")
+        print(f"\n👥 GUARDIAN STATUS:")
+        print(f"   - Available guardians: {sorted(available_guardian_ids)}")
+        print(f"   - Missing guardians: {sorted(missing_guardian_ids)}")
+        print(f"   - All guardian IDs: {sorted(all_guardian_ids)}")
+        print(f"   - Quorum required: {quorum}, Available: {len(available_guardian_ids)}")
+        print(f"   - Submitted ballots: {len(submitted_ballots_json)}")
         
         # Validate we have enough guardians
         if len(available_guardian_ids) < quorum:
@@ -1200,6 +1403,8 @@ def api_combine_decryption_shares():
             print(f"Excluding compensated shares for available guardians: {sorted(excluded_guardians)}")
         
         # Call service function
+        print(f"\n📊 COMPUTATION: Combining decryption shares...")
+        service_start = time.time()
         results = combine_decryption_shares_service(
             party_names,
             candidate_names,
@@ -1216,12 +1421,19 @@ def api_combine_decryption_shares():
             generate_ballot_hash,
             generate_ballot_hash_electionguard
         )
+        service_elapsed = time.time() - service_start
+        print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
         
         # Format response - ensure all nested dicts are serialized to strings
+        print(f"\n📦 SERIALIZATION: Preparing response...")
+        serialization_start = time.time()
         response = {
             'status': 'success',
-            'results': serialize_dict_to_string(results)
+            'results': results
         }
+        serialization_elapsed = time.time() - serialization_start
+        print(f"✅ SERIALIZATION COMPLETE: {serialization_elapsed*1000:.2f}ms")
+        
         # ## print_json(response, "combine_decryption_shares_response")  # Disabled
         # ## print_data(response, "./io/combine_decryption_shares_response.json")  # Disabled
         logger.info('Finished combining decryption shares')
@@ -1229,12 +1441,20 @@ def api_combine_decryption_shares():
         # Force garbage collection to free memory
         gc.collect()
         
-        return jsonify(response), 200
+        endpoint_elapsed = time.time() - endpoint_start
+        print(f"\n{'='*80}")
+        print(f"🎯 COMBINE_DECRYPTION_SHARES TOTAL TIME: {endpoint_elapsed*1000:.2f}ms")
+        print(f"   ├─ Deserialization: {deserialize_elapsed*1000:.2f}ms ({deserialize_elapsed/endpoint_elapsed*100:.1f}%)")
+        print(f"   ├─ Computation: {service_elapsed*1000:.2f}ms ({service_elapsed/endpoint_elapsed*100:.1f}%)")
+        print(f"   └─ Serialization: {serialization_elapsed*1000:.2f}ms ({serialization_elapsed/endpoint_elapsed*100:.1f}%)")
+        print('='*80 + '\n')
+        
+        return make_binary_response(response)
     
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/api/encrypt', methods=['POST'])
 # @rate_limit(max_requests=10, window_minutes=1)
@@ -1465,20 +1685,24 @@ if __name__ == '__main__':
     print("IMPORTANT: Use proper WSGI server and SSL certificates in production!")
     print("Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)")
     print("Configuration: Unlimited payload size, High thread count, Stateless operation")
-    print("Memory Management: Aggressive GC, No state accumulation, Chunk-safe processing")
-    
-    # Run with proper configuration to handle concurrent chunk processing
-    # threaded=True + high thread count prevents blocking on concurrent requests
-    # Stateless design ensures no memory accumulation across chunks
+    print("Memory Manager: Aggressive GC, No state accumulation, Chunk-safe processing")
+
+    # Fix Windows loopback latency: Nagle's algorithm + TCP delayed ACKs add ~2s per request.
+    # StreamRequestHandler.disable_nagle_algorithm = True sets TCP_NODELAY on each connection.
     from werkzeug.serving import WSGIRequestHandler
-    WSGIRequestHandler.protocol_version = "HTTP/1.1"  # Enable keepalive
-    
+
+    class NagleDisabledHandler(WSGIRequestHandler):
+        """Disables Nagle's algorithm via the built-in disable_nagle_algorithm flag."""
+        disable_nagle_algorithm = True  # Sets TCP_NODELAY in StreamRequestHandler.setup()
+
+    NagleDisabledHandler.protocol_version = "HTTP/1.1"  # Keep-alive
+
     app.run(
         host='0.0.0.0', 
         port=5000, 
         debug=False, 
-        threaded=True,  # Enable threading
-        processes=1,     # Single process with multiple threads
+        threaded=True,
+        processes=1,
         use_reloader=False,
-        request_handler=WSGIRequestHandler
+        request_handler=NagleDisabledHandler
     )

@@ -13,7 +13,7 @@ import urllib3  # ← ADD THIS
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # ← ADD THIS
 
 # API Base URL
-BASE_URL = "http://192.168.30.138:5000"
+BASE_URL = "http://127.0.0.1:5000"
 
 # Test Configuration - HARDCODED VALUES
 NUMBER_OF_GUARDIANS = 5

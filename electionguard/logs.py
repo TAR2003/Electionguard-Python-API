@@ -22,10 +22,10 @@ class ElectionGuardLog(Singleton):
         super().__init__()
 
         self.__logger = logging.getLogger("electionguard")
-        # Pythong's logger will use the most restrictive of the logger level and the handler level,
-        #   so set the logger to the lowest level the handler ever might log at
-        self.__logger.setLevel(logging.DEBUG)
-        self.__stream_handler = get_stream_handler(logging.INFO)
+        # Set to WARNING to suppress verbose INFO logs (e.g. huge binary blobs in elgamal.py).
+        # Each log_info() call invokes inspect.stack() — at INFO level this adds 2-5s/endpoint.
+        self.__logger.setLevel(logging.WARNING)
+        self.__stream_handler = get_stream_handler(logging.WARNING)
         self.__logger.addHandler(self.__stream_handler)
 
     @staticmethod
@@ -78,31 +78,36 @@ class ElectionGuardLog(Singleton):
         """
         Logs a debug message
         """
-        self.__logger.debug(self.__formatted_message(message), *args, **kwargs)
+        if self.__logger.isEnabledFor(logging.DEBUG):
+            self.__logger.debug(self.__formatted_message(message), *args, **kwargs)
 
     def info(self, message: str, *args: Any, **kwargs: Any) -> None:
         """
         Logs a info message
         """
-        self.__logger.info(self.__formatted_message(message), *args, **kwargs)
+        if self.__logger.isEnabledFor(logging.INFO):
+            self.__logger.info(self.__formatted_message(message), *args, **kwargs)
 
     def warn(self, message: str, *args: Any, **kwargs: Any) -> None:
         """
         Logs a warning message
         """
-        self.__logger.warning(self.__formatted_message(message), *args, **kwargs)
+        if self.__logger.isEnabledFor(logging.WARNING):
+            self.__logger.warning(self.__formatted_message(message), *args, **kwargs)
 
     def error(self, message: str, *args: Any, **kwargs: Any) -> None:
         """
         Logs a error message
         """
-        self.__logger.error(self.__formatted_message(message), *args, **kwargs)
+        if self.__logger.isEnabledFor(logging.ERROR):
+            self.__logger.error(self.__formatted_message(message), *args, **kwargs)
 
     def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
         """
         Logs a critical message
         """
-        self.__logger.critical(self.__formatted_message(message), *args, **kwargs)
+        if self.__logger.isEnabledFor(logging.CRITICAL):
+            self.__logger.critical(self.__formatted_message(message), *args, **kwargs)
 
 
 def get_stream_handler(log_level: int) -> logging.StreamHandler:

@@ -16,7 +16,7 @@ BASE_URL = "http://192.168.30.128:5000"
 
 NUMBER_OF_GUARDIANS = 3
 QUORUM = 2
-BALLOT_COUNTS = [200]
+BALLOT_COUNTS = [5000]
 
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
