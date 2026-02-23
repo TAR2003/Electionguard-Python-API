@@ -24,12 +24,12 @@ BASE_URL = "http://127.0.0.1:5000"  # explicit IPv4 — avoids localhost→::1 f
 
 NUMBER_OF_GUARDIANS = 3
 QUORUM = 2
-BALLOT_COUNTS = [3000]
+BALLOT_COUNTS = [10]
 
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
-CHUNK_SIZE = 1000
+CHUNK_SIZE = 10
 
 MSGPACK_HEADERS = {
     "Content-Type": "application/msgpack",
@@ -49,9 +49,9 @@ import json
 from collections import defaultdict
 
 # ensure the io directory exists (it should already, but just in case)
-ios.makedirs(os.path.join(os.path.dirname(__file__), "io"), exist_ok=True)
+os.makedirs(os.path.join(os.path.dirname(__file__), "io"), exist_ok=True)
 
-# counters for naming multiple calls per endpoint
+# counters for naming multiple calls per endpoint (not used when overwriting)
 _log_counters = defaultdict(int)
 
 def log(msg, indent=0):
@@ -61,15 +61,13 @@ def log(msg, indent=0):
 def _log_io(api_name: str, payload: object, response: object):
     """Write the request payload and response to files under io/.
 
-    The files are named using the api_name and an incrementing counter so that
-    repeated calls to the same endpoint are preserved.
+    Overwrites the previous log for a given API name so only the most recent
+    request/response pair is kept.  This keeps the folder trimmed and matches
+    the user's request.
     """
     directory = os.path.join(os.path.dirname(__file__), "io")
-    # increment counter for this api
-    _log_counters[api_name] += 1
-    count = _log_counters[api_name]
-    req_path = os.path.join(directory, f"{api_name}_request_{count}.json")
-    resp_path = os.path.join(directory, f"{api_name}_response_{count}.json")
+    req_path = os.path.join(directory, f"{api_name}_request.json")
+    resp_path = os.path.join(directory, f"{api_name}_response.json")
     try:
         with open(req_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
