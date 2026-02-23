@@ -229,6 +229,9 @@ class DecryptionMediator:
         )
         for ciphertext_ballot in ciphertext_ballots:
             ballot_id = ciphertext_ballot.object_id
+            # Skip CAST ballots that have no ballot shares (only spoiled ballots are decrypted individually)
+            if ballot_id not in self._ballot_shares:
+                continue
             ballot_shares = self._ballot_shares[ballot_id]
 
             for (

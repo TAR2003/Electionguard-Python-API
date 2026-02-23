@@ -1,12 +1,8 @@
-# pylint: disable=consider-using-with
+﻿# pylint: disable=consider-using-with
 from __future__ import annotations
 import traceback
 from typing import Any, Callable, Iterable, List, TypeVar
 from contextlib import AbstractContextManager
-from multiprocessing import Pool as ProcessPool
-from multiprocessing.dummy import Pool as ThreadPool
-from multiprocessing.pool import Pool
-from psutil import cpu_count
 
 from .logs import log_warning
 from .singleton import Singleton
@@ -16,45 +12,34 @@ _T = TypeVar("_T")
 
 class Scheduler(Singleton, AbstractContextManager):
     """
-    Worker that wraps Multprocessing and allows
-    for shared context or spawning processes.
-    Implemented as a singleton to guarantee there is only one set
-    of tread and process pools in use throughout the library.
-    Also implements the [Context Manager Protocol](https://docs.python.org/3.8/library/stdtypes.html#typecontextmanager)
+    Worker that wraps task scheduling.
+    No multiprocessing/threading pools -- sequential execution is significantly faster
+    for small GIL-bound Python crypto tasks (especially on Windows where process
+    spawning adds 1-2s overhead per pool creation).
     """
-
-    __process_pool: Pool
-    __thread_pool: Pool
 
     def __init__(self) -> None:
         super().__init__()
-        self._open()
 
     def __enter__(self) -> Scheduler:
-        self._open()
         return self
 
     def __exit__(self, exc_type: Any, exc_value: Any, exc_traceback: Any) -> None:
-        self.close()
-
-    def _open(self) -> None:
-        """Open pools"""
-        max_processes = cpu_count(logical=False)
-        # Reserve one CPU for I/O bound tasks
-        if max_processes > 2:
-            max_processes = max_processes - 1
-        self.__process_pool = ProcessPool(max_processes)
-        self.__thread_pool = ThreadPool(max_processes)
+        pass
 
     def close(self) -> None:
-        """Close pools"""
-        self.__process_pool.close()
-        self.__thread_pool.close()
+        """No-op: no pools to close."""
+        pass
 
     @staticmethod
     def cpu_count() -> int:
         """Get CPU count"""
-        return int(cpu_count(logical=False))
+        try:
+            from psutil import cpu_count
+            return int(cpu_count(logical=False))
+        except Exception:
+            import os
+            return os.cpu_count() or 1
 
     def schedule(
         self,
@@ -63,47 +48,31 @@ class Scheduler(Singleton, AbstractContextManager):
         with_shared_resources: bool = False,
     ) -> List[_T]:
         """
-        Schedule tasks with list of arguments
-        :param task: the callable task to execute
-        :param arguments: the list of lists passed to the task using starmap
-        :param with_shared_resources: flag to use threads instead of processes
-            allowing resources to be shared.  note
-            when using the threadpool, execution is bound
-            by default to the [global interpreter lock]
-            (https://docs.python.org/3.8/glossary.html#term-global-interpreter-lock)
+        Execute tasks sequentially (no pool overhead).
+        with_shared_resources is ignored for API compatibility.
         """
-        if with_shared_resources:
-            return self.safe_starmap(self.__thread_pool, task, arguments)
-        return self.safe_starmap(self.__process_pool, task, arguments)
+        return [task(*args) for args in arguments]
 
     @staticmethod
     def safe_starmap(
-        pool: Pool, task: Callable, arguments: Iterable[Iterable[Any]]
+        pool: Any, task: Callable, arguments: Iterable[Iterable[Any]]
     ) -> List[_T]:
-        """Safe wrapper around starmap to ensure pool is open"""
+        """Legacy method kept for API compatibility -- runs sequentially."""
         try:
-            return pool.starmap(task, arguments)
-        except ValueError as e:
+            return [task(*args) for args in arguments]
+        except Exception:
             log_warning(
-                f"safe_starmap({task}, {arguments}) exception ValueError({str(e)})"
-            )
-            return []
-        except Exception:  # pylint: disable=broad-except
-            log_warning(
-                f"safe_starmap({task}, {arguments}) failed with \n {traceback.format_exc()}"
+                f"safe_starmap({task}) failed with \n {traceback.format_exc()}"
             )
             return []
 
     @staticmethod
-    def safe_map(pool: Pool, task: Callable, arguments: Iterable[Any]) -> List[_T]:
-        """Safe wrapper around starmap to ensure pool is open"""
+    def safe_map(pool: Any, task: Callable, arguments: Iterable[Any]) -> List[_T]:
+        """Legacy method kept for API compatibility -- runs sequentially."""
         try:
-            return pool.map(task, arguments)
-        except ValueError as e:
-            log_warning(f"safe_map({task}, {arguments}) exception ValueError({str(e)})")
-            return []
-        except Exception:  # pylint: disable=broad-except
+            return [task(arg) for arg in arguments]
+        except Exception:
             log_warning(
-                f"safe_starmap({task}, {arguments}) failed with \n {traceback.format_exc()}"
+                f"safe_map({task}) failed with \n {traceback.format_exc()}"
             )
             return []

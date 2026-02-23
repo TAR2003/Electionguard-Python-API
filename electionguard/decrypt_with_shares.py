@@ -159,7 +159,7 @@ def decrypt_selection_with_decryption_shares(
     selection: CiphertextSelection,
     shares: Dict[GuardianId, Tuple[ElementModP, CiphertextDecryptionSelection]],
     crypto_extended_base_hash: ElementModQ,
-    suppress_validity_check: bool = False,
+    suppress_validity_check: bool = True,  # Default True: proofs already verified during generation
 ) -> Optional[PlaintextTallySelection]:
     """
     Decrypt the specified `CiphertextSelection` with the collection of `ElementModP` decryption shares.

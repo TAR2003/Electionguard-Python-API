@@ -21,6 +21,7 @@ from electionguard.ballot import (
     SubmittedBallot,
 )
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import to_binary_transport, from_binary_transport
 from electionguard.constants import get_constants
 from electionguard.data_store import DataStore
 from electionguard.decryption_mediator import DecryptionMediator
@@ -74,6 +75,7 @@ from electionguard.decryption import (
     decrypt_backup,
     compute_lagrange_coefficients_for_guardians as compute_lagrange_coeffs
 )
+from manifest_cache import get_manifest_cache
 
 
 
@@ -272,8 +274,8 @@ def create_encrypted_ballot_service(
     # Generate ballot hash
     ballot_hash = generate_ballot_hash_func(encrypted_ballot)
     
-    # Serialize the ballot for response
-    serialized_ballot = to_raw(encrypted_ballot)
+    # Serialize the ballot for response using binary serialization (FAST)
+    serialized_ballot = to_binary_transport(encrypted_ballot)
     
     return {
         'encrypted_ballot': serialized_ballot,
@@ -307,21 +309,14 @@ def encrypt_ballot(
     Returns:
         Encrypted ballot or None if encryption fails
     """
-    joint_public_key = int_to_p(joint_public_key_json)
-    commitment_hash = int_to_q(commitment_hash_json)
-    manifest = create_election_manifest_func(party_names, candidate_names)
-    
-    # Create election builder and set public key and commitment hash
-    election_builder = ElectionBuilder(
-        number_of_guardians=number_of_guardians,
-        quorum=quorum,
-        manifest=manifest
+    # Use cache to avoid expensive manifest/context recreation (critical for 50+ ballots!)
+    cache = get_manifest_cache()
+    internal_manifest, context = cache.get_or_create_context(
+        party_names, candidate_names,
+        joint_public_key_json, commitment_hash_json,
+        number_of_guardians, quorum,
+        create_election_manifest_func
     )
-    election_builder.set_public_key(joint_public_key)
-    election_builder.set_commitment_hash(commitment_hash)
-    
-    # Build the election context
-    internal_manifest, context = get_optional(election_builder.build())
     
     # Create encryption device and mediator
     device = EncryptionDevice(device_id=1, session_id=1, launch_code=1, location="polling-place")

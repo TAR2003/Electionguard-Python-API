@@ -21,6 +21,7 @@ from electionguard.ballot import (
     SubmittedBallot,
 )
 from electionguard.serialize import to_raw, from_raw
+from binary_serialize import to_binary_transport, from_binary_transport
 from electionguard.constants import get_constants
 from electionguard.data_store import DataStore
 from electionguard.decryption_mediator import DecryptionMediator
@@ -179,7 +180,7 @@ def setup_guardians_service(
         guardian_info = {
             'id': guardian.id,
             'sequence_order': guardian.sequence_order,
-            'election_public_key': to_raw(guardian.share_key()),
+            'election_public_key': to_binary_transport(guardian.share_key()),
             'backups': {}
         }
         
@@ -188,7 +189,7 @@ def setup_guardians_service(
             if other_guardian.id != guardian.id:
                 backup = guardian._guardian_election_partial_key_backups.get(other_guardian.id)
                 if backup:
-                    guardian_info['backups'][other_guardian.id] = to_raw(backup)
+                    guardian_info['backups'][other_guardian.id] = to_binary_transport(backup)
         
         guardian_data.append(guardian_info)
         
@@ -203,7 +204,7 @@ def setup_guardians_service(
         })
         polynomials.append({
             'guardian_id': guardian.id,
-            'polynomial': to_raw(guardian._election_keys.polynomial)
+            'polynomial': to_binary_transport(guardian._election_keys.polynomial)
         })
     
     return {
