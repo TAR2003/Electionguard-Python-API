@@ -1,0 +1,16 @@
+{
+  "number_of_guardians": 3,
+  "quorum": 2,
+  "party_names": [
+    "Democratic Alliance",
+    "Progressive Coalition",
+    "Unity Party",
+    "Reform League"
+  ],
+  "candidate_names": [
+    "Alice Johnson",
+    "Bob Smith",
+    "Carol Williams",
+    "David Brown"
+  ]
+}

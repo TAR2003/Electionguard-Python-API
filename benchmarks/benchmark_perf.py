@@ -1,4 +1,7 @@
 """Quick benchmark to verify performance after logging fix."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import json
 from services.setup_guardians import setup_guardians_service

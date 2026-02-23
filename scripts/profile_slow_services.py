@@ -1,4 +1,7 @@
 ﻿"""Profile slow services directly."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import cProfile, pstats, io, time, logging, json
 logging.getLogger("electionguard").setLevel(logging.WARNING)
 logging.getLogger().setLevel(logging.WARNING)

@@ -2,6 +2,9 @@
 Test script to demonstrate ballot sanitization with actual encrypted ballot data.
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 from ballot_sanitizer import (
     sanitize_ballot, 

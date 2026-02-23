@@ -1,6 +1,6 @@
 """Profile partial decryption to find the 900ms bottleneck."""
-import sys, time, json
-sys.path.insert(0, '.')
+import sys, os, time, json
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.setup_guardians import setup_guardians_service
 from services.create_encrypted_ballot import create_election_manifest, create_encrypted_ballot_service

@@ -24,12 +24,12 @@ BASE_URL = "http://127.0.0.1:5000"  # explicit IPv4 — avoids localhost→::1 f
 
 NUMBER_OF_GUARDIANS = 3
 QUORUM = 2
-BALLOT_COUNTS = [10]
+BALLOT_COUNTS = [100]
 
 PARTY_NAMES = ["Democratic Alliance", "Progressive Coalition", "Unity Party", "Reform League"]
 CANDIDATE_NAMES = ["Alice Johnson", "Bob Smith", "Carol Williams", "David Brown"]
 
-CHUNK_SIZE = 10
+CHUNK_SIZE = 50
 
 MSGPACK_HEADERS = {
     "Content-Type": "application/msgpack",

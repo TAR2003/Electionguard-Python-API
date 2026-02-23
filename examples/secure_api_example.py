@@ -4,6 +4,9 @@ Example integration with your existing ElectionGuard API.
 This shows how to modify your existing API endpoints to use the ballot sanitization.
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from flask import Flask, request, jsonify
 from ballot_publisher import BallotPublisher
 import json

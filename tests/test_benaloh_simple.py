@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 from services.benaloh_challenge import benaloh_challenge_service
 
