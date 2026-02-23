@@ -43,8 +43,43 @@ _http_session = requests.Session()
 # =========================================================
 # HELPERS
 # =========================================================
+
+import os
+import json
+from collections import defaultdict
+
+# ensure the io directory exists (it should already, but just in case)
+ios.makedirs(os.path.join(os.path.dirname(__file__), "io"), exist_ok=True)
+
+# counters for naming multiple calls per endpoint
+_log_counters = defaultdict(int)
+
 def log(msg, indent=0):
     print("  " * indent + msg)
+
+
+def _log_io(api_name: str, payload: object, response: object):
+    """Write the request payload and response to files under io/.
+
+    The files are named using the api_name and an incrementing counter so that
+    repeated calls to the same endpoint are preserved.
+    """
+    directory = os.path.join(os.path.dirname(__file__), "io")
+    # increment counter for this api
+    _log_counters[api_name] += 1
+    count = _log_counters[api_name]
+    req_path = os.path.join(directory, f"{api_name}_request_{count}.json")
+    resp_path = os.path.join(directory, f"{api_name}_response_{count}.json")
+    try:
+        with open(req_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"⚠️ Failed to write request log for {api_name}: {e}")
+    try:
+        with open(resp_path, "w", encoding="utf-8") as f:
+            json.dump(response, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"⚠️ Failed to write response log for {api_name}: {e}")
 
 
 def time_api_call(api_name, url, payload, indent=0):
@@ -67,6 +102,11 @@ def time_api_call(api_name, url, payload, indent=0):
             f"{api_name} failed ({response.status_code}): {response.text[:500]}"
         )
         data = msgpack.unpackb(response.content, raw=False)
+        # log the request and the decoded response
+        try:
+            _log_io(api_name, payload, data)
+        except Exception as e:
+            print(f"⚠️ logging failure for {api_name}: {e}")
     finally:
         if response is not None:
             try:

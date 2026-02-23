@@ -1,8 +1,0 @@
-WARNING: MASTER_KEY not set in environment. Using random key (data will be lost on restart)
-Starting development server with enhanced security and 2-storage design...
-IMPORTANT: Use proper WSGI server and SSL certificates in production!
-Storage Design: encrypted_data (Storage 1) + credentials_with_hmac (Storage 2)
-Configuration: Unlimited payload size, High thread count, Stateless operation
-Memory Manager: Aggressive GC, No state accumulation, Chunk-safe processing
- * Serving Flask app 'api'
- * Debug mode: off
