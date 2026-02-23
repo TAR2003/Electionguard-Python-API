@@ -708,13 +708,17 @@ def api_create_encrypted_ballot():
         
         # Create the complete ballot response for sanitization
         serialization_start = time.time()
+
+        # result['encrypted_ballot'] is a base64+msgpack binary transport string.
+        # ballot_sanitizer expects a plain JSON string, so decode it first.
+        ballot_dict_for_sanitizer = from_binary_transport_to_dict(result['encrypted_ballot'])
         complete_ballot_response = {
             'status': 'success',
-            'encrypted_ballot': result['encrypted_ballot'],
+            'encrypted_ballot': json.dumps(ballot_dict_for_sanitizer),
             'ballot_hash': result['ballot_hash']
         }
-        
-        # Keep a copy of the original encrypted ballot with nonces
+
+        # Keep a copy of the original binary-transport ballot (with nonces) for storage/tallying
         encrypted_ballot_with_nonce = result['encrypted_ballot']
         
         # Apply secure ballot publication based on ballot status
