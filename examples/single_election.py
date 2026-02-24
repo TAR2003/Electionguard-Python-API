@@ -191,7 +191,9 @@ def run_chunked_election(ballot_count):
             indent=2,
         )
 
-        encrypted_ballots.append(result["encrypted_ballot"])
+        # encrypted_ballot_with_nonce is binary transport (base64 msgpack) — required by the
+        # tally service. encrypted_ballot is the sanitized display version (nonces stripped).
+        encrypted_ballots.append(result["encrypted_ballot_with_nonce"])
 
     # ------------------------------------------------------------------
     # STEP 3: CHUNKING

@@ -8,7 +8,7 @@ from electionguard.manifest import Manifest
 from electionguard.election import CiphertextElectionContext, make_ciphertext_election_context
 from electionguard.group import ElementModP, ElementModQ, int_to_q, int_to_p, g_pow_p
 from electionguard.elgamal import ElGamalPublicKey
-
+from binary_serialize import from_binary_transport_to_dict
 def benaloh_challenge_service(
     encrypted_ballot_with_nonce: str,
     party_names: List[str],
@@ -37,8 +37,10 @@ def benaloh_challenge_service(
         Dict containing verification result and details
     """
     try:
-        # Parse the encrypted ballot with nonces
-        ballot_data = json.loads(encrypted_ballot_with_nonce)
+        # Decode the binary-transport (base64 msgpack) ballot back to a dict.
+        # The Java backend stores encrypted_ballot_with_nonce as the base64 binary
+        # transport string produced by to_binary_transport(); json.loads() fails on it.
+        ballot_data = from_binary_transport_to_dict(encrypted_ballot_with_nonce)
         
         # Convert joint public key string to ElGamalPublicKey
         joint_public_key_element = int_to_p(int(joint_public_key))

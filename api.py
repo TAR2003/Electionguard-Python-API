@@ -361,11 +361,33 @@ def deserialize_list_of_strings_to_list_of_dicts(data, label="list"):
     else:
         raise ValueError(f"Expected list or string, got {type(data)}")
 
+def _bytes_to_str_deep(obj):
+    """Recursively decode bytes → UTF-8 str for dicts/lists coming from msgpack raw=True mode."""
+    if isinstance(obj, bytes):
+        return obj.decode('utf-8', errors='replace')
+    elif isinstance(obj, dict):
+        return {_bytes_to_str_deep(k): _bytes_to_str_deep(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_bytes_to_str_deep(v) for v in obj]
+    return obj
+
+
 def get_request_data():
-    """Parse request body: accepts both application/msgpack and application/json."""
+    """Parse request body: accepts both application/msgpack and application/json.
+
+    Handles both the modern msgpack format (use_bin_type=True / raw=False) and
+    the legacy format (use_bin_type=False / raw=True).  The legacy format stores
+    byte strings as msgpack *raw* type, which cannot be decoded as UTF-8 when
+    ``raw=False`` is used, causing a UnicodeDecodeError / UnpackValueError.  We
+    silently fall back to raw=True and convert all byte values to strings.
+    """
     ct = request.content_type or ''
     if 'msgpack' in ct:
-        return msgpack.unpackb(request.data, raw=False)
+        try:
+            return msgpack.unpackb(request.data, raw=False)
+        except (UnicodeDecodeError, ValueError):
+            raw_data = msgpack.unpackb(request.data, raw=True)
+            return _bytes_to_str_deep(raw_data)
     return request.json
 
 
@@ -708,14 +730,21 @@ def api_create_encrypted_ballot():
         
         # Create the complete ballot response for sanitization
         serialization_start = time.time()
+
+        # Keep binary transport as the with-nonce version for casting/tallying.
+        # (base64-encoded msgpack of the full CiphertextBallot, including nonces)
+        encrypted_ballot_with_nonce = result['encrypted_ballot']
+
+        # Decode binary transport -> dict -> JSON string so the ballot_publisher
+        # sanitizer can parse it.  json.dumps on a base64 string would fail.
+        ballot_dict_for_sanitization = from_binary_transport_to_dict(encrypted_ballot_with_nonce)
+        ballot_json_for_sanitization = json.dumps(ballot_dict_for_sanitization)
+
         complete_ballot_response = {
             'status': 'success',
-            'encrypted_ballot': result['encrypted_ballot'],
+            'encrypted_ballot': ballot_json_for_sanitization,
             'ballot_hash': result['ballot_hash']
         }
-        
-        # Keep a copy of the original encrypted ballot with nonces
-        encrypted_ballot_with_nonce = result['encrypted_ballot']
         
         # Apply secure ballot publication based on ballot status
         try:
@@ -787,23 +816,25 @@ def api_create_encrypted_ballot():
         return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/benaloh_challenge', methods=['POST'])
+@track_request('/benaloh_challenge')
 def api_benaloh_challenge():
     """API endpoint to perform Benaloh challenge verification."""
     try:
         print('Benaloh challenge call at the microservice')
-        data = request.json
-        
+        # Accept both application/json and application/msgpack (Java backend sends msgpack)
+        data = get_request_data()
+
         # Validate required fields
         required_fields = [
             'encrypted_ballot_with_nonce', 'party_names', 'candidate_names',
             'candidate_name', 'joint_public_key', 'commitment_hash',
             'number_of_guardians', 'quorum'
         ]
-        
+
         validation_error = validate_input(data, required_fields)
         if validation_error:
-            return jsonify({'status': 'error', 'message': validation_error}), 400
-        
+            return make_binary_response({'status': 'error', 'message': validation_error}, status=400)
+
         encrypted_ballot_with_nonce = data['encrypted_ballot_with_nonce']
         party_names = data['party_names']
         candidate_names = data['candidate_names']
@@ -812,9 +843,9 @@ def api_benaloh_challenge():
         commitment_hash = data['commitment_hash']
         number_of_guardians = safe_int_conversion(data['number_of_guardians'])
         quorum = safe_int_conversion(data['quorum'])
-        
+
         ## print_json(data, "benaloh_challenge_request")
-        
+
         # Call the Benaloh challenge service
         result = benaloh_challenge_service(
             encrypted_ballot_with_nonce=encrypted_ballot_with_nonce,
@@ -826,29 +857,29 @@ def api_benaloh_challenge():
             number_of_guardians=number_of_guardians,
             quorum=quorum
         )
-        
+
         ## print_json(result, "benaloh_challenge_response")
         print('Finished Benaloh challenge call at the microservice')
-        
+
         if result['success']:
-            return jsonify({
+            return make_binary_response({
                 'status': 'success',
                 'match': result['match'],
                 'message': result['message'],
                 'ballot_id': result.get('ballot_id'),
                 'verified_candidate': result.get('verified_candidate'),
                 'expected_candidate': result.get('expected_candidate')
-            }), 200
+            })
         else:
-            return jsonify({
+            return make_binary_response({
                 'status': 'error',
                 'message': result['error']
-            }), 400
-    
+            }, status=400)
+
     except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
 @app.route('/health', methods=['GET'])
 def api_health_check():
@@ -1468,13 +1499,13 @@ def encrypt_it():
     """
     if not PQ_AVAILABLE:
         logger.error("Post-quantum cryptography not available")
-        return jsonify({'error': 'Post-quantum cryptography not available'}), 501
+        return make_binary_response({'error': 'Post-quantum cryptography not available'}, 501)
 
-    data = request.get_json()
+    data = get_request_data()
     validation_error = validate_input(data, ['private_key'])
     if validation_error:
         logger.warning(f"Validation error: {validation_error}")
-        return jsonify({'error': validation_error}), 400
+        return make_binary_response({'error': validation_error}, 400)
 
     try:
         # Input validation (optimized)
@@ -1546,15 +1577,15 @@ def encrypt_it():
         logger.info(f"Successful encryption for IP: {request.remote_addr}")
         
         # Return only 2 storage items instead of 3
-        return jsonify({
+        return make_binary_response({
             'status': 'success',
             'encrypted_data': base64.b64encode(encrypted_data).decode(),  # Storage 1
             'credentials': base64.b64encode(final_credentials).decode()    # Storage 2 (includes HMAC)
-        }), 200
+        })
 
     except Exception as e:
         logger.error(f"Encryption error: {str(e)}")
-        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
+        return make_binary_response({'status': 'error', 'message': 'Internal server error'}, 500)
 
 @app.route('/api/decrypt', methods=['POST'])
 # @rate_limit(max_requests=10, window_minutes=1)
@@ -1568,13 +1599,13 @@ def decrypt_it():
     """
     if not PQ_AVAILABLE:
         logger.error("Post-quantum cryptography not available")
-        return jsonify({'error': 'Post-quantum cryptography not available'}), 501
+        return make_binary_response({'error': 'Post-quantum cryptography not available'}, 501)
 
-    data = request.get_json()
+    data = get_request_data()
     validation_error = validate_input(data, ['encrypted_data', 'credentials'])
     if validation_error:
         logger.warning(f"Validation error: {validation_error}")
-        return jsonify({'error': validation_error}), 400
+        return make_binary_response({'error': validation_error}, 400)
 
     try:
         # Fast decode and parse credentials
@@ -1583,11 +1614,11 @@ def decrypt_it():
         
         # Version check
         if credentials.get('version') != '1.0':
-            return jsonify({'error': 'Unsupported credential version'}), 400
+            return make_binary_response({'error': 'Unsupported credential version'}, 400)
         
         # Extract HMAC tag from credentials
         if 'hmac_tag' not in credentials:
-            return jsonify({'error': 'Missing HMAC tag in credentials'}), 400
+            return make_binary_response({'error': 'Missing HMAC tag in credentials'}, 400)
         
         hmac_tag = base64.b64decode(credentials['hmac_tag'])
         
@@ -1628,7 +1659,7 @@ def decrypt_it():
         
         if not verify_hmac(hmac_key, credentials_for_verification_json, hmac_tag):
             logger.warning(f"HMAC verification failed for IP: {request.remote_addr}")
-            return jsonify({'error': 'Authentication failed - credentials tampered'}), 403
+            return make_binary_response({'error': 'Authentication failed - credentials tampered'}, 403)
 
         # Fast decryption of private key
         nonce = base64.b64decode(credentials['nonce'])
@@ -1641,14 +1672,14 @@ def decrypt_it():
 
         logger.info(f"Successful decryption for IP: {request.remote_addr}")
         
-        return jsonify({
+        return make_binary_response({
             'status': 'success',
             'private_key': decrypted_data.decode('utf-8')
-        }), 200
+        })
 
     except Exception as e:
         logger.error(f"Decryption error: {str(e)}")
-        return jsonify({'status': 'error', 'message': 'Decryption failed'}), 400
+        return make_binary_response({'status': 'error', 'message': 'Decryption failed'}, 400)
 
 @app.route('/api/health', methods=['GET'])
 def health_check():

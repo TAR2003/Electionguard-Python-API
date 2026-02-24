@@ -1,0 +1,65 @@
+# Dockerfile for ElectionGuard API Service
+# Optimized for fast response times and low latency user-facing operations
+# Handles: setup_guardians, create_encrypted_ballot, benaloh_challenge, encrypt, decrypt
+
+FROM python:3.12
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONOPTIMIZE=2
+ENV PYTHONHASHSEED=0
+ENV MALLOC_TRIM_THRESHOLD_=100000
+ENV FLASK_APP=api.py
+ENV FLASK_ENV=production
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create and set working directory
+WORKDIR /app
+
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Expose the port
+EXPOSE 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Run with MAXIMUM THROUGHPUT settings for thousands of concurrent requests
+# Optimizations for API service:
+# - workers 8 (handle massive concurrent load, 2x CPU cores)
+# - worker-class gthread (better for I/O-bound crypto operations)
+# - threads 4 (32 concurrent requests total: 8 workers × 4 threads)
+# - timeout 60 (fast operations only, fail quickly)
+# - max-requests 5000 (less frequent recycling for stability)
+# - preload-app (faster startup, shared crypto constants)
+# - worker-connections 1000 (high concurrency per worker)
+# - backlog 2048 (large queue for burst traffic)
+# - worker-tmp-dir /dev/shm (RAM-based temp storage)
+CMD ["gunicorn", \
+    "--bind", "0.0.0.0:5000", \
+    "--workers", "10", \
+    "--worker-class", "sync", \
+    "--threads", "1", \
+    "--max-requests", "5000", \
+    "--max-requests-jitter", "100", \
+    "--timeout", "60", \
+    "--worker-tmp-dir", "/dev/shm", \
+    "--access-logfile", "-", \
+    "--error-logfile", "-", \
+    "--log-level", "warning", \
+    "api:app"]

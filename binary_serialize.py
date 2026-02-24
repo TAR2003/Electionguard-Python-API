@@ -46,6 +46,28 @@ def to_binary(data: Any) -> bytes:
     return msgpack.packb(json_data, use_bin_type=True)
 
 
+def _bytes_to_str(obj: Any) -> Any:
+    """
+    Recursively convert bytes objects to UTF-8 strings.
+
+    Used as a fallback when msgpack data was packed without ``use_bin_type=True``
+    (old msgpack format, pre-1.0 default).  In that case all byte-string payloads
+    come back as Python ``bytes`` under ``raw=True`` mode and need to be decoded
+    before they can be serialised to JSON.
+
+    Invalid byte sequences are replaced with the Unicode replacement character
+    (U+FFFD) so that the round-trip does not hard-fail on corrupted or
+    legacy-formatted payloads.
+    """
+    if isinstance(obj, bytes):
+        return obj.decode('utf-8', errors='replace')
+    elif isinstance(obj, dict):
+        return {_bytes_to_str(k): _bytes_to_str(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_bytes_to_str(v) for v in obj]
+    return obj
+
+
 def from_binary(type_: Type[_T], binary_data: bytes) -> _T:
     """
     Deserialize msgpack binary data back to ElectionGuard object.
@@ -57,9 +79,17 @@ def from_binary(type_: Type[_T], binary_data: bytes) -> _T:
     Returns:
         Reconstructed ElectionGuard object
     """
-    # Unpack msgpack to dict
-    json_data = msgpack.unpackb(binary_data, raw=False)
-    
+    # Unpack msgpack to dict.
+    # Try the modern format first (use_bin_type=True → raw=False).  If the data
+    # was packed with the old default (use_bin_type=False, i.e. raw format for
+    # byte strings) the decode will raise UnicodeDecodeError / UnpackValueError,
+    # so we fall back to raw=True and convert bytes manually.
+    try:
+        json_data = msgpack.unpackb(binary_data, raw=False)
+    except (UnicodeDecodeError, ValueError):
+        raw_data = msgpack.unpackb(binary_data, raw=True)
+        json_data = _bytes_to_str(raw_data)
+
     # Convert dict to ElectionGuard object using from_raw
     json_string = json.dumps(json_data)
     return from_raw(type_, json_string)
@@ -75,7 +105,12 @@ def from_binary_to_dict(binary_data: bytes) -> Any:
     Returns:
         Python dict or primitive type
     """
-    return msgpack.unpackb(binary_data, raw=False)
+    # Same fallback strategy as from_binary – handle both old and new msgpack formats.
+    try:
+        return msgpack.unpackb(binary_data, raw=False)
+    except (UnicodeDecodeError, ValueError):
+        raw_data = msgpack.unpackb(binary_data, raw=True)
+        return _bytes_to_str(raw_data)
 
 
 def encode_for_transport(binary_data: bytes) -> str:

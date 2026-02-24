@@ -1,0 +1,96 @@
+# Dockerfile for ElectionGuard Worker Service
+# Optimized for heavy, long-running cryptographic operations
+# Handles: create_encrypted_tally, create_partial_decryption, create_compensated_decryption, combine_decryption_shares
+
+FROM python:3.12-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=api.py
+ENV FLASK_ENV=production
+# Python optimization flags
+ENV PYTHONOPTIMIZE=2
+ENV MALLOC_TRIM_THRESHOLD_=100000
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create and set working directory
+WORKDIR /app
+
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Expose the port
+EXPOSE 5001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:5001/health || exit 1
+
+# OPTIMIZED Run Configuration for Heavy Cryptographic Processing
+# 
+# Key settings explained:
+# 
+# --workers 3: Matches rabbitmq.worker.concurrency.max=5 in application.properties
+#              Multiple workers enable parallel chunk processing
+#              3 workers is a sweet spot for 10k chunks (not too high to exhaust memory)
+# 
+# --worker-class sync: No threading/async - prevents deadlocks in cryptographic operations
+#                      Each worker processes one request at a time sequentially
+# 
+# --threads 1: Single-threaded workers for predictable memory usage
+#              ElectionGuard crypto is CPU-bound, not I/O-bound
+# 
+# --timeout 600: 10 minutes for heavy crypto operations
+#                create_encrypted_tally can take several minutes per chunk
+# 
+# --max-requests 200: Recycle worker after 200 requests to prevent memory accumulation
+#                     With 10k chunks, this means ~50 worker restarts (10000/200)
+#                     Balances between cold-start overhead and memory cleanup
+# 
+# --max-requests-jitter 40: Randomize recycling ±40 requests to prevent thundering herd
+#                           Workers restart at 160-240 requests instead of all at 200
+# 
+# --preload: Load ElectionGuard modules ONCE before forking workers
+#            Eliminates cold-start latency and shares module memory across workers
+#            CRITICAL for consistent performance
+# 
+# --graceful-timeout 120: Allow 2 minutes for worker to finish current request on shutdown
+#                         Prevents interrupting crypto operations mid-calculation
+# 
+# --worker-tmp-dir /dev/shm: Use shared memory for temp files (faster than disk)
+#                            CRITICAL for I/O-heavy crypto operations
+# 
+# --keep-alive 5: Keep HTTP connections alive to reduce connection overhead
+# 
+# --worker-connections 50: Max simultaneous connections per worker
+#                          With 3 workers × 50 = 150 total capacity
+CMD ["gunicorn", \
+    "--bind", "0.0.0.0:5001", \
+    "--workers", "4", \
+    "--worker-class", "sync", \
+    "--threads", "1", \
+    "--max-requests", "5000", \
+    "--max-requests-jitter", "40", \
+    "--timeout", "600", \
+    "--graceful-timeout", "120", \
+    "--keep-alive", "5", \
+    "--preload", \
+    "--worker-tmp-dir", "/dev/shm", \
+    "--worker-connections", "50", \
+    "--access-logfile", "-", \
+    "--error-logfile", "-", \
+    "--log-level", "info", \
+    "api:app"]
