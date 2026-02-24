@@ -2,6 +2,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, execute_batch
 import requests
 import json
+import msgpack
 from datetime import datetime
 
 def get_election_by_id(election_id):
@@ -82,25 +83,50 @@ def get_election_choices(election_id):
 
 def create_encrypted_ballot(ballot_data, api_url="http://localhost:5000/create_encrypted_ballot"):
     """
-    Call the ElectionGuard API to create an encrypted ballot
-    
+    Call the ElectionGuard API to create an encrypted ballot.
+
+    The API accepts:
+        party_names, candidate_names, candidate_name, ballot_id,
+        joint_public_key, commitment_hash, number_of_guardians, quorum,
+        ballot_status (optional, default 'CAST')
+
+    The API returns:
+        status, ballot_id, ballot_status, ballot_hash,
+        encrypted_ballot (sanitized, no nonces),
+        encrypted_ballot_with_nonce (full, with nonces - use for storage/tallying),
+        publication_status
+
     Args:
         ballot_data (dict): Ballot data to send to API
         api_url (str): API endpoint URL
-        
+
     Returns:
         dict: API response data, or None if error
     """
     try:
         headers = {'Content-Type': 'application/json'}
-        response = requests.post(api_url, json=ballot_data, headers=headers)
-        
+        response = requests.post(api_url, json=ballot_data, headers=headers, timeout=300)
+
         if response.status_code == 200:
-            return response.json()
+            content_type = response.headers.get('Content-Type', '')
+            if 'msgpack' in content_type:
+                return msgpack.unpackb(response.content, raw=False)
+            else:
+                # Fallback: try JSON, then msgpack
+                try:
+                    return response.json()
+                except Exception:
+                    return msgpack.unpackb(response.content, raw=False)
         else:
-            print(f"API Error: Status {response.status_code}, Response: {response.text}")
+            print(f"API Error: Status {response.status_code}, Response: {response.text[:500]}")
+            # Try to decode error body as msgpack for a cleaner message
+            try:
+                err = msgpack.unpackb(response.content, raw=False)
+                print(f"API Error detail: {err}")
+            except Exception:
+                pass
             return None
-            
+
     except Exception as error:
         print(f"Error calling API: {error}")
         return None
@@ -266,9 +292,16 @@ def generate_ballots(election_id, num_ballots=1000):
             print('api response: ', api_response)
             if api_response and api_response.get('status') == 'success':
                 # Extract response data
+                # Use ballot_hash from the published ballot
                 ballot_hash = api_response['ballot_hash']
-                encrypted_ballot = api_response['encrypted_ballot']
-                
+                # Use encrypted_ballot_with_nonce for DB storage so the
+                # tally/decryption services receive the full ciphertext.
+                # Fall back to encrypted_ballot if the nonce field is absent.
+                encrypted_ballot = (
+                    api_response.get('encrypted_ballot_with_nonce')
+                    or api_response['encrypted_ballot']
+                )
+
                 # Add to database
                 success = add_ballot_to_db(
                     election_id=election_id,
@@ -303,7 +336,7 @@ def generate_ballots(election_id, num_ballots=1000):
 
 if __name__ == "__main__":
     # Set your election ID here
-    ELECTION_ID = 6
-    NUM_BALLOTS = 50
+    ELECTION_ID = 1
+    NUM_BALLOTS = 300
     
     generate_ballots(ELECTION_ID, NUM_BALLOTS)
