@@ -205,8 +205,21 @@ def tally_encrypted_ballots(
     commitment_hash = int_to_q(commitment_hash_json)
     encrypted_ballots: List[CiphertextBallot] = []
     for encrypted_ballot_json in encrypted_ballots_json:
-        # Binary deserialization (base64)
-        encrypted_ballots.append(from_binary_transport(CiphertextBallot, encrypted_ballot_json))
+        # Detect format: plain JSON dict/string (from the database, sent by Java backend)
+        # vs. base64-encoded msgpack binary (used by standalone tests/examples).
+        if isinstance(encrypted_ballot_json, dict):
+            # Already a Python dict — directly deserialize via from_raw
+            encrypted_ballots.append(from_raw(CiphertextBallot, json.dumps(encrypted_ballot_json)))
+        elif isinstance(encrypted_ballot_json, str):
+            stripped = encrypted_ballot_json.strip()
+            if stripped.startswith('{') or stripped.startswith('['):
+                # Plain JSON string stored in the database
+                encrypted_ballots.append(from_raw(CiphertextBallot, encrypted_ballot_json))
+            else:
+                # Base64-encoded msgpack binary transport (legacy / test format)
+                encrypted_ballots.append(from_binary_transport(CiphertextBallot, encrypted_ballot_json))
+        else:
+            raise ValueError(f"Unexpected encrypted ballot format: {type(encrypted_ballot_json)}")
     deserialize_elapsed = time.time() - deserialize_start
     print(f"    \u23f1\ufe0f  Ballot deserialization: {deserialize_elapsed*1000:.2f}ms")
     
