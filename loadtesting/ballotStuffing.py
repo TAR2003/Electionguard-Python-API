@@ -5,6 +5,8 @@ import json
 import msgpack
 from datetime import datetime
 
+# pip install psycopg2-binary requests msgpack
+
 def get_election_by_id(election_id):
     """
     Retrieve election row by election_id
@@ -217,6 +219,30 @@ def distribute_ballots_by_candidate(num_ballots, num_candidates):
     return distribution
 
 
+def get_selection_for_ballot(candidate_names, group_start_idx, ballot_idx_in_group, max_choices):
+    """
+    Return the list of candidates to vote for using the cycling multi-select pattern.
+
+    For a group whose primary candidate is at `group_start_idx`, the selection
+    size cycles 1 → 2 → … → max_choices → 1 → 2 → …  Candidates are taken
+    in order (wrapping around) starting from group_start_idx.
+
+    Examples (4 candidates, max_choices=3, group_start_idx=0):
+        ballot 0 → size 1 → [A]
+        ballot 1 → size 2 → [A, B]
+        ballot 2 → size 3 → [A, B, C]
+        ballot 3 → size 1 → [A]          (cycle repeats)
+
+    Examples (group_start_idx=2, i.e. primary = C):
+        ballot 0 → size 1 → [C]
+        ballot 1 → size 2 → [C, D]
+        ballot 2 → size 3 → [C, D, A]    (wraps around)
+    """
+    n = len(candidate_names)
+    size = (ballot_idx_in_group % max_choices) + 1   # 1 … max_choices
+    return [candidate_names[(group_start_idx + k) % n] for k in range(size)]
+
+
 def generate_ballots(election_id, num_ballots=1000):
     """
     Generate and insert ballots for an election
@@ -236,7 +262,9 @@ def generate_ballots(election_id, num_ballots=1000):
     print(f"Election: {election['election_title']}")
     print(f"Number of Guardians: {election['number_of_guardians']}")
     print(f"Quorum: {election['election_quorum']}")
-    
+    max_choices = int(election.get('max_choices') or 1)
+    print(f"Max Choices per Ballot: {max_choices}")
+
     # Step 2: Fetch election choices
     choices = get_election_choices(election_id)
     if not choices:
@@ -264,29 +292,30 @@ def generate_ballots(election_id, num_ballots=1000):
     fail_count = 0
     
     for candidate_idx, candidate_ballot_count in enumerate(distribution):
-        candidate_name = candidate_names[candidate_idx]
-        print(f"\nGenerating {candidate_ballot_count} ballots for {candidate_name}...")
-        
+        primary_candidate = candidate_names[candidate_idx]
+        print(f"\nGenerating {candidate_ballot_count} ballots for group starting at '{primary_candidate}'...")
+
         for i in range(candidate_ballot_count):
             ballot_id = f"ballot-{ballot_counter}"
             user_email = f"a{ballot_counter}@example.com"
-            
+
+            # Build the cycling multi-select list for this ballot
+            selected_candidates = get_selection_for_ballot(
+                candidate_names, candidate_idx, i, max_choices
+            )
+
             # Prepare API request payload
             payload = {
                 "party_names": party_names,
                 "candidate_names": candidate_names,
-                "candidate_name": candidate_name,
+                "candidate_names_to_vote": selected_candidates,   # List[str], multi-choice ready
                 "ballot_id": ballot_id,
                 "joint_public_key": election['joint_public_key'],
                 "commitment_hash": election['base_hash'],
                 "number_of_guardians": election['number_of_guardians'],
-                "quorum": election['election_quorum']
+                "quorum": election['election_quorum'],
+                "max_choices": max_choices,
             }
-            
-            print('payload:')
-            with open('payload.json', 'w') as f:
-                json.dump(payload,f)
-            print(payload)
             # Call ElectionGuard API
             api_response = create_encrypted_ballot(payload)
             print('api response: ', api_response)
@@ -337,6 +366,6 @@ def generate_ballots(election_id, num_ballots=1000):
 if __name__ == "__main__":
     # Set your election ID here
     ELECTION_ID = 1
-    NUM_BALLOTS = 300
+    NUM_BALLOTS = 1300
     
     generate_ballots(ELECTION_ID, NUM_BALLOTS)

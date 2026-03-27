@@ -21,11 +21,12 @@ class ManifestCache:
         self._manifest_cache: Dict[str, Manifest] = {}
         self._context_cache: Dict[str, Tuple[InternalManifest, CiphertextElectionContext]] = {}
     
-    def _get_manifest_key(self, party_names: list, candidate_names: list) -> str:
-        """Generate cache key from party and candidate names."""
+    def _get_manifest_key(self, party_names: list, candidate_names: list, max_choices: int = 1) -> str:
+        """Generate cache key from party and candidate names including max_choices."""
         key_data = json.dumps({
             'parties': sorted(party_names),
-            'candidates': sorted(candidate_names)
+            'candidates': sorted(candidate_names),
+            'max_choices': max_choices
         }, sort_keys=True)
         return hashlib.sha256(key_data.encode()).hexdigest()
     
@@ -36,33 +37,34 @@ class ManifestCache:
         return hashlib.sha256(key_data.encode()).hexdigest()
     
     def get_or_create_manifest(self, party_names: list, candidate_names: list, 
-                               create_manifest_func) -> Manifest:
+                               create_manifest_func, max_choices: int = 1) -> Manifest:
         """Get cached manifest or create new one."""
-        cache_key = self._get_manifest_key(party_names, candidate_names)
+        cache_key = self._get_manifest_key(party_names, candidate_names, max_choices)
         
         if cache_key not in self._manifest_cache:
             # Create new manifest
-            manifest = create_manifest_func(party_names, candidate_names)
+            manifest = create_manifest_func(party_names, candidate_names, max_choices)
             self._manifest_cache[cache_key] = manifest
-            print(f"  📝 MANIFEST CREATED (cached) - key: {cache_key[:8]}...")
+            print(f"  📝 MANIFEST CREATED (cached, max_choices={max_choices}) - key: {cache_key[:8]}...")
         else:
             manifest = self._manifest_cache[cache_key]
-            print(f"  ⚡ MANIFEST FROM CACHE - key: {cache_key[:8]}... (FAST!)")
+            print(f"  ⚡ MANIFEST FROM CACHE (max_choices={max_choices}) - key: {cache_key[:8]}... (FAST!)")
         
         return manifest
     
     def get_or_create_context(self, party_names: list, candidate_names: list,
                              joint_public_key_int: int, commitment_hash_int: int,
                              number_of_guardians: int, quorum: int,
-                             create_manifest_func) -> Tuple[InternalManifest, CiphertextElectionContext]:
+                             create_manifest_func,
+                             max_choices: int = 1) -> Tuple[InternalManifest, CiphertextElectionContext]:
         """Get cached context or create new one."""
-        manifest_key = self._get_manifest_key(party_names, candidate_names)
+        manifest_key = self._get_manifest_key(party_names, candidate_names, max_choices)
         context_key = self._get_context_key(manifest_key, joint_public_key_int, 
                                            commitment_hash_int, number_of_guardians, quorum)
         
         if context_key not in self._context_cache:
             # Get or create manifest first
-            manifest = self.get_or_create_manifest(party_names, candidate_names, create_manifest_func)
+            manifest = self.get_or_create_manifest(party_names, candidate_names, create_manifest_func, max_choices)
             
             # Create context
             joint_public_key = int_to_p(joint_public_key_int)
@@ -78,10 +80,10 @@ class ManifestCache:
             
             internal_manifest, context = get_optional(election_builder.build())
             self._context_cache[context_key] = (internal_manifest, context)
-            print(f"  🔨 CONTEXT CREATED (cached) - key: {context_key[:8]}...")
+            print(f"  🔨 CONTEXT CREATED (cached, max_choices={max_choices}) - key: {context_key[:8]}...")
         else:
             internal_manifest, context = self._context_cache[context_key]
-            print(f"  ⚡ CONTEXT FROM CACHE - key: {context_key[:8]}... (FAST!)")
+            print(f"  ⚡ CONTEXT FROM CACHE (max_choices={max_choices}) - key: {context_key[:8]}... (FAST!)")
         
         return internal_manifest, context
     

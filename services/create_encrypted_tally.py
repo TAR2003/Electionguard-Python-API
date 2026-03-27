@@ -122,7 +122,8 @@ def create_encrypted_tally_service(
     number_of_guardians: int,
     quorum: int,
     create_election_manifest_func,
-    ciphertext_tally_to_raw_func
+    ciphertext_tally_to_raw_func,
+    max_choices: int = 1
 ) -> Dict[str, Any]:
     """
     Service function to tally encrypted ballots.
@@ -160,7 +161,8 @@ def create_encrypted_tally_service(
         number_of_guardians,
         quorum,
         create_election_manifest_func,
-        ciphertext_tally_to_raw_func
+        ciphertext_tally_to_raw_func,
+        max_choices=max_choices
     )
     
     return {
@@ -178,7 +180,8 @@ def tally_encrypted_ballots(
     number_of_guardians: int,
     quorum: int,
     create_election_manifest_func,
-    ciphertext_tally_to_raw_func
+    ciphertext_tally_to_raw_func,
+    max_choices: int = 1
 ) -> Tuple[Dict, List[Dict]]:
     """
     Tally encrypted ballots.
@@ -230,7 +233,8 @@ def tally_encrypted_ballots(
         party_names, candidate_names,
         joint_public_key_json, commitment_hash_json,
         number_of_guardians, quorum,
-        create_election_manifest_func
+        create_election_manifest_func,
+        max_choices=max_choices
     )
     context_elapsed = time.time() - context_start
     print(f"    \u23f1\ufe0f  Context building: {context_elapsed*1000:.2f}ms")

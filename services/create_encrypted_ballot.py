@@ -81,9 +81,19 @@ from manifest_cache import get_manifest_cache
 
 def create_election_manifest(
     party_names: List[str], 
-    candidate_names: List[str]
+    candidate_names: List[str],
+    max_choices: int = 1
 ) -> Manifest:
-    """Create a complete election manifest programmatically."""
+    """Create a complete election manifest programmatically.
+    
+    Args:
+        party_names: List of party names
+        candidate_names: List of candidate names
+        max_choices: Maximum number of candidates a voter can select (default 1)
+    """
+    # Ensure max_choices is valid
+    max_choices = max(1, min(int(max_choices), len(candidate_names)))
+    
     # Create geopolitical unit
     geopolitical_unit = GeopoliticalUnit(
         object_id="county-1",
@@ -132,18 +142,21 @@ def create_election_manifest(
             )
         )
 
+    # Use n_of_m for multiple choices, one_of_m for single choice
+    vote_variation = VoteVariationType.n_of_m if max_choices > 1 else VoteVariationType.one_of_m
+
     contests: List[Contest] = [
         Contest(
             object_id="contest-1",
             sequence_order=0,
             electoral_district_id="county-1",
-            vote_variation=VoteVariationType.one_of_m,
+            vote_variation=vote_variation,
             name="County Executive",
             ballot_selections=ballot_selections,
             ballot_title=None,
             ballot_subtitle=None,
-            votes_allowed=1,
-            number_elected=1,
+            votes_allowed=max_choices,
+            number_elected=max_choices,
         ),
     ]
     
@@ -168,31 +181,45 @@ def create_election_manifest(
     return manifest
 
 
-def create_plaintext_ballot(party_names, candidate_names, candidate_name: str, ballot_id: str) -> PlaintextBallot:
-    """Create a single plaintext ballot for a specific candidate."""
-    manifest = create_election_manifest(
-        party_names,
-        candidate_names,
-    )
+def create_plaintext_ballot(party_names, candidate_names, candidate_names_to_vote, ballot_id: str, max_choices: int = 1) -> PlaintextBallot:
+    """Create a single plaintext ballot for one or more selected candidates.
+    
+    Args:
+        party_names: List of party names
+        candidate_names: List of all candidate names in the election
+        candidate_names_to_vote: Single candidate name (str) or list of candidate names to vote for
+        ballot_id: Unique identifier for the ballot
+        max_choices: Maximum allowed selections (used to recreate manifest consistently)
+    """
+    # Normalize to a list
+    if isinstance(candidate_names_to_vote, str):
+        selections_to_vote = [candidate_names_to_vote]
+    else:
+        selections_to_vote = list(candidate_names_to_vote)
+    
+    # Validate no duplicates
+    if len(selections_to_vote) != len(set(selections_to_vote)):
+        raise ValueError("Duplicate candidate selections are not allowed")
+    
+    # Validate all candidates exist
+    for name in selections_to_vote:
+        if name not in candidate_names:
+            raise ValueError(f"Candidate '{name}' not found in election candidates")
+    
+    # Validate number of selections
+    if len(selections_to_vote) > max_choices:
+        raise ValueError(f"Too many candidates selected ({len(selections_to_vote)}). Maximum allowed is {max_choices}")
+    
+    manifest = create_election_manifest(party_names, candidate_names, max_choices)
     
     # Get ballot style
     ballot_style = manifest.ballot_styles[0]
-    
-    selection = None
-    contest = manifest.contests[0]
-    for option in contest.ballot_selections:
-        if option.candidate_id == candidate_name:
-            selection = option
-            break
-    
-    if not selection:
-        raise ValueError(f"Candidate {candidate_name} not found in manifest")
     
     ballot_contests = []
     for contest in manifest.contests:
         selections = []
         for option in contest.ballot_selections:
-            vote = 1 if option.object_id == selection.object_id else 0
+            vote = 1 if option.object_id in selections_to_vote else 0
             selections.append(
                 PlaintextBallotSelection(
                     object_id=option.object_id,
@@ -217,7 +244,7 @@ def create_plaintext_ballot(party_names, candidate_names, candidate_name: str, b
 def create_encrypted_ballot_service(
     party_names: List[str],
     candidate_names: List[str],
-    candidate_name: str,
+    candidate_names_to_vote,
     ballot_id: str,
     joint_public_key: str,
     commitment_hash: str,
@@ -225,15 +252,16 @@ def create_encrypted_ballot_service(
     quorum: int,
     create_plaintext_ballot_func,
     create_election_manifest_func,
-    generate_ballot_hash_func
+    generate_ballot_hash_func,
+    max_choices: int = 1
 ) -> Dict[str, Any]:
     """
     Service function to create and encrypt a ballot.
     
     Args:
         party_names: List of party names
-        candidate_names: List of candidate names
-        candidate_name: Name of the candidate to vote for
+        candidate_names: List of all candidate names in the election
+        candidate_names_to_vote: Single candidate name or list of candidate names to vote for
         ballot_id: Unique identifier for the ballot
         joint_public_key: Joint public key as string
         commitment_hash: Commitment hash as string
@@ -242,6 +270,7 @@ def create_encrypted_ballot_service(
         create_plaintext_ballot_func: Function to create plaintext ballot
         create_election_manifest_func: Function to create election manifest
         generate_ballot_hash_func: Function to generate ballot hash
+        max_choices: Maximum number of candidates voter can select (default 1)
         
     Returns:
         Dictionary containing the encrypted ballot and hash
@@ -254,7 +283,7 @@ def create_encrypted_ballot_service(
     commitment_hash_int = int(commitment_hash)
     
     # Create plaintext ballot
-    ballot = create_plaintext_ballot_func(party_names, candidate_names, candidate_name, ballot_id)
+    ballot = create_plaintext_ballot_func(party_names, candidate_names, candidate_names_to_vote, ballot_id, max_choices)
     
     # Encrypt the ballot
     encrypted_ballot = encrypt_ballot(
@@ -265,7 +294,8 @@ def create_encrypted_ballot_service(
         ballot,
         number_of_guardians,
         quorum,
-        create_election_manifest_func
+        create_election_manifest_func,
+        max_choices
     )
     
     if not encrypted_ballot:
@@ -291,7 +321,8 @@ def encrypt_ballot(
     plaintext_ballot: PlaintextBallot,
     number_of_guardians: int,
     quorum: int,
-    create_election_manifest_func
+    create_election_manifest_func,
+    max_choices: int = 1
 ) -> Optional[CiphertextBallot]:
     """
     Encrypt a single ballot.
@@ -305,6 +336,7 @@ def encrypt_ballot(
         number_of_guardians: Number of guardians
         quorum: Quorum for the election
         create_election_manifest_func: Function to create election manifest
+        max_choices: Maximum number of candidates voter can select (default 1)
         
     Returns:
         Encrypted ballot or None if encryption fails
@@ -315,7 +347,8 @@ def encrypt_ballot(
         party_names, candidate_names,
         joint_public_key_json, commitment_hash_json,
         number_of_guardians, quorum,
-        create_election_manifest_func
+        create_election_manifest_func,
+        max_choices
     )
     
     # Create encryption device and mediator

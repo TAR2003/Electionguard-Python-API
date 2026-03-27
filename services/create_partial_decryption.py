@@ -95,7 +95,8 @@ def create_partial_decryption_service(
     quorum: int,
     create_election_manifest_func,
     raw_to_ciphertext_tally_func,
-    compute_ballot_shares_func
+    compute_ballot_shares_func,
+    max_choices: int = 1
 ) -> Dict[str, Any]:
     """
     Service function to compute decryption shares for a single guardian.
@@ -144,7 +145,8 @@ def create_partial_decryption_service(
         quorum,
         create_election_manifest_func,
         raw_to_ciphertext_tally_func,
-        compute_ballot_shares_func
+        compute_ballot_shares_func,
+        max_choices=max_choices
     )
     
     return {
@@ -170,7 +172,8 @@ def compute_guardian_decryption_shares(
     quorum: int,
     create_election_manifest_func,
     raw_to_ciphertext_tally_func,
-    compute_ballot_shares_func
+    compute_ballot_shares_func,
+    max_choices: int = 1
 ) -> Dict[str, Any]:
     """
     Compute decryption shares for a single guardian.
@@ -246,11 +249,12 @@ def compute_guardian_decryption_shares(
         party_names, candidate_names,
         joint_public_key_json, commitment_hash_json,
         number_of_guardians, quorum,
-        create_election_manifest_func
+        create_election_manifest_func,
+        max_choices=max_choices
     )
     # InternalManifest stores manifest only in __post_init__ (InitVar), not as attribute.
     # Retrieve the actual Manifest object from the cache directly.
-    manifest = cache.get_or_create_manifest(party_names, candidate_names, create_election_manifest_func)
+    manifest = cache.get_or_create_manifest(party_names, candidate_names, create_election_manifest_func, max_choices=max_choices)
     
     ciphertext_tally = raw_to_ciphertext_tally_func(ciphertext_tally_json, manifest=manifest)
     submitted_ballots = []

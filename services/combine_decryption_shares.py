@@ -93,7 +93,8 @@ def combine_decryption_shares_service(
     create_election_manifest_func,
     raw_to_ciphertext_tally_func,
     generate_ballot_hash_func,
-    generate_ballot_hash_electionguard_func
+    generate_ballot_hash_electionguard_func,
+    max_choices: int = 1
 ) -> Dict[str, Any]:
     """
     Service function to combine decryption shares to produce final election results with quorum support.
@@ -131,10 +132,11 @@ def combine_decryption_shares_service(
         party_names, candidate_names,
         joint_public_key_int, commitment_hash_int,
         number_of_guardians, quorum,
-        create_election_manifest_func
+        create_election_manifest_func,
+        max_choices=max_choices
     )
     # InternalManifest stores manifest only in __post_init__ (InitVar), not as attribute.
-    manifest = cache.get_or_create_manifest(party_names, candidate_names, create_election_manifest_func)
+    manifest = cache.get_or_create_manifest(party_names, candidate_names, create_election_manifest_func, max_choices=max_choices)
     
     # Process ciphertext tally and ballots
     ciphertext_tally = raw_to_ciphertext_tally_func(ciphertext_tally_json, manifest=manifest)

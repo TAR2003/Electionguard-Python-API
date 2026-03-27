@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 import json
 from electionguard.serialize import from_raw, to_raw
 from electionguard.ballot import CiphertextBallot, PlaintextBallot
@@ -13,7 +13,7 @@ def benaloh_challenge_service(
     encrypted_ballot_with_nonce: str,
     party_names: List[str],
     candidate_names: List[str], 
-    candidate_name: str,
+    candidate_names_to_verify,
     joint_public_key: str,
     commitment_hash: str,
     number_of_guardians: int,
@@ -21,13 +21,13 @@ def benaloh_challenge_service(
 ) -> Dict[str, Any]:
     """
     Perform Benaloh challenge by decrypting an encrypted ballot with nonces
-    and verifying if the choice matches the expected candidate.
+    and verifying if the choices match the expected candidates.
     
     Args:
         encrypted_ballot_with_nonce: JSON string of encrypted ballot containing nonces
         party_names: List of party names
-        candidate_names: List of candidate names
-        candidate_name: Expected candidate choice to verify against
+        candidate_names: List of all candidate names in the election
+        candidate_names_to_verify: Single candidate name (str) or list of candidate names to verify against
         joint_public_key: Joint public key used for encryption
         commitment_hash: Commitment hash
         number_of_guardians: Number of guardians
@@ -37,6 +37,12 @@ def benaloh_challenge_service(
         Dict containing verification result and details
     """
     try:
+        # Normalize candidate_names_to_verify to a set
+        if isinstance(candidate_names_to_verify, str):
+            expected_candidates: Set[str] = {candidate_names_to_verify}
+        else:
+            expected_candidates: Set[str] = set(candidate_names_to_verify)
+
         # Decode the binary-transport (base64 msgpack) ballot back to a dict.
         # The Java backend stores encrypted_ballot_with_nonce as the base64 binary
         # transport string produced by to_binary_transport(); json.loads() fails on it.
@@ -46,7 +52,7 @@ def benaloh_challenge_service(
         joint_public_key_element = int_to_p(int(joint_public_key))
         public_key = ElGamalPublicKey(joint_public_key_element)
         
-        # Decrypt each selection using its nonce and find which candidate was chosen
+        # Decrypt each selection using its nonce and find which candidates were chosen
         decrypted_votes = {}
         
         # Process each contest
@@ -68,7 +74,6 @@ def benaloh_challenge_service(
                     data = int_to_p(int(ciphertext["data"], 16))
                     
                     # Decrypt using the known nonce: plaintext = data / (pad^nonce)
-                    # Actually, we use decrypt_known_nonce method from ElGamal
                     from electionguard.elgamal import ElGamalCiphertext
                     
                     elgamal_ciphertext = ElGamalCiphertext(pad, data)
@@ -79,31 +84,40 @@ def benaloh_challenge_service(
                     decrypted_votes[selection_id] = decrypted_value
                     print(f"Decrypted {selection_id}: {decrypted_value}")
         
-        # Find which candidate received the vote (should have value 1)
-        voted_candidate = None
+        # Collect all candidates that received a vote (value == 1)
+        voted_candidates: Set[str] = set()
         for candidate, vote_count in decrypted_votes.items():
             if vote_count == 1:
-                voted_candidate = candidate
-                break
+                voted_candidates.add(candidate)
         
-        # Check if the voted candidate matches the expected candidate
-        if voted_candidate == candidate_name:
+        print(f"Voted candidates: {voted_candidates}")
+        print(f"Expected candidates: {expected_candidates}")
+        
+        # Check if the voted candidates exactly match the expected candidates
+        if voted_candidates == expected_candidates:
             return {
                 "success": True,
                 "match": True,
-                "message": f"Ballot choice matches expected candidate: {candidate_name}",
+                "message": f"Ballot choice matches expected selection: {', '.join(sorted(expected_candidates))}",
                 "ballot_id": ballot_data.get("object_id"),
-                "verified_candidate": voted_candidate,
+                "verified_candidates": sorted(voted_candidates),
+                "verified_candidate": ', '.join(sorted(voted_candidates)),
                 "decrypted_votes": decrypted_votes
             }
         else:
             return {
-                "success": True, 
+                "success": True,
                 "match": False,
-                "message": f"Ballot choice does NOT match expected candidate: {candidate_name}. Actual choice: {voted_candidate}",
+                "message": (
+                    f"Ballot choice does NOT match expected selection. "
+                    f"Expected: {', '.join(sorted(expected_candidates))}. "
+                    f"Actual: {', '.join(sorted(voted_candidates)) if voted_candidates else 'none'}"
+                ),
                 "ballot_id": ballot_data.get("object_id"),
-                "expected_candidate": candidate_name,
-                "actual_candidate": voted_candidate,
+                "expected_candidates": sorted(expected_candidates),
+                "expected_candidate": ', '.join(sorted(expected_candidates)),
+                "actual_candidates": sorted(voted_candidates),
+                "verified_candidate": ', '.join(sorted(voted_candidates)) if voted_candidates else None,
                 "decrypted_votes": decrypted_votes
             }
             

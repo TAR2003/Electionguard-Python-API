@@ -75,9 +75,9 @@ from electionguard.election_polynomial import (
 from electionguard.encrypt import EncryptionDevice, EncryptionMediator
 from electionguard.guardian import Guardian
 from electionguard.key_ceremony_mediator import KeyCeremonyMediator
-from electionguard.key_ceremony import ElectionKeyPair, ElectionPublicKey
+from electionguard.key_ceremony import ElectionKeyPair, ElectionPublicKey, CeremonyDetails
 from electionguard.ballot_box import BallotBox, get_ballots
-from electionguard.elgamal import ElGamalPublicKey, ElGamalSecretKey, ElGamalCiphertext
+from electionguard.elgamal import ElGamalPublicKey, ElGamalSecretKey, ElGamalCiphertext, elgamal_combine_public_keys
 from electionguard.group import ElementModQ, ElementModP, g_pow_p, int_to_p, int_to_q
 from electionguard.manifest import (
     Manifest,
@@ -523,6 +523,8 @@ def rate_limit(max_requests=10, window_minutes=1):
                 rate_limit_storage[client_ip] = []
             
             if len(rate_limit_storage[client_ip]) >= max_requests:
+                if 'msgpack' in (request.content_type or ''):
+                    return make_binary_response({'error': 'Rate limit exceeded'}, 429)
                 return jsonify({'error': 'Rate limit exceeded'}), 429
             
             rate_limit_storage[client_ip].append(current_time)
@@ -690,7 +692,7 @@ def api_create_encrypted_ballot():
         data = get_request_data()
         party_names = data['party_names']
         candidate_names = data['candidate_names']
-        candidate_name = data['candidate_name']
+        candidate_names_to_vote = data['candidate_names_to_vote']
         ballot_id = data['ballot_id']
         joint_public_key = data['joint_public_key']  # Expecting string
         commitment_hash = data['commitment_hash']    # Expecting string
@@ -706,13 +708,14 @@ def api_create_encrypted_ballot():
         # Get election data with safe int conversion
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
         quorum = safe_int_conversion(data.get('quorum', 1))
+        max_choices = safe_int_conversion(data.get('max_choices', 1))
         
         # Call service function to create the encrypted ballot
         service_start = time.time()
         result = create_encrypted_ballot_service(
             party_names,
             candidate_names,
-            candidate_name,
+            candidate_names_to_vote,
             ballot_id,
             joint_public_key,
             commitment_hash,
@@ -720,7 +723,8 @@ def api_create_encrypted_ballot():
             quorum,
             create_plaintext_ballot,
             create_election_manifest,
-            generate_ballot_hash_electionguard
+            generate_ballot_hash_electionguard,
+            max_choices=max_choices
         )
         service_elapsed = time.time() - service_start
         
@@ -815,6 +819,208 @@ def api_create_encrypted_ballot():
     except Exception as e:
         return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
 
+
+@app.route('/combine_guardian_public_keys', methods=['POST'])
+def api_combine_guardian_public_keys():
+    """Combine guardian public keys generated on client machines into a joint election key."""
+    try:
+        data = get_request_data()
+        raw_public_keys = data.get('public_keys', [])
+        party_names = data.get('party_names', [])
+        candidate_names = data.get('candidate_names', [])
+
+        if not raw_public_keys or len(raw_public_keys) == 0:
+            raise ValueError('public_keys is required')
+
+        parsed_public_keys = [int_to_p(int(k)) for k in raw_public_keys]
+
+        joint_public_key = elgamal_combine_public_keys(parsed_public_keys)
+        commitment_hash = hash_elems(parsed_public_keys)
+        manifest = create_election_manifest(party_names, candidate_names)
+
+        response = {
+            'status': 'success',
+            'joint_public_key': str(int(joint_public_key)),
+            'commitment_hash': str(int(commitment_hash)),
+            'manifest': to_binary_transport(manifest),
+            'number_of_guardians': safe_int_conversion(data.get('number_of_guardians', len(raw_public_keys))),
+            'quorum': safe_int_conversion(data.get('quorum', len(raw_public_keys)))
+        }
+
+        return make_binary_response(response)
+
+    except ValueError as e:
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
+    except Exception as e:
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
+
+
+@app.route('/generate_guardian_credentials', methods=['POST'])
+def api_generate_guardian_credentials():
+    """Generate one guardian credential bundle in ElectionGuard-compatible formats."""
+    try:
+        data = get_request_data()
+
+        guardian_id = str(data.get('guardian_id') or data.get('sequence_order') or '1')
+        sequence_order = safe_int_conversion(data.get('sequence_order', 1))
+        number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
+        quorum = safe_int_conversion(data.get('quorum', 1))
+
+        guardian = Guardian.from_nonce(
+            guardian_id,
+            sequence_order,
+            number_of_guardians,
+            quorum,
+        )
+
+        response = {
+            'status': 'success',
+            'private_key': {
+                'guardian_id': guardian.id,
+                'private_key': str(int(guardian._election_keys.key_pair.secret_key)),
+            },
+            'public_key': {
+                'guardian_id': guardian.id,
+                'public_key': str(int(guardian._election_keys.key_pair.public_key)),
+            },
+            'polynomial': {
+                'guardian_id': guardian.id,
+                'polynomial': to_binary_transport(guardian._election_keys.polynomial),
+            },
+            'guardian_data': {
+                'id': guardian.id,
+                'sequence_order': guardian.sequence_order,
+                'election_public_key': to_binary_transport(guardian.share_key()),
+                'backups': {}
+            }
+        }
+
+        return make_binary_response(response)
+
+    except ValueError as e:
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
+    except Exception as e:
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
+
+
+@app.route('/generate_guardian_backup_shares', methods=['POST', 'OPTIONS'])
+def api_generate_guardian_backup_shares():
+    """
+    Round 2 key ceremony endpoint: generate ElectionGuard encrypted backup shares.
+
+    This endpoint is intentionally browser-friendly for direct frontend calls so
+    sensitive key material does not need to transit the Java backend.
+    """
+    if request.method == 'OPTIONS':
+        return make_binary_response({'status': 'ok'}, status=200)
+
+    try:
+        data = get_request_data()
+
+        sender_guardian_id = str(data.get('sender_guardian_id') or data.get('guardian_id') or '')
+        sender_sequence_order = safe_int_conversion(data.get('sender_sequence_order', data.get('sequence_order', 1)))
+        number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
+        quorum = safe_int_conversion(data.get('quorum', 1))
+
+        sender_private_key_payload = data.get('sender_private_key')
+        sender_public_key_payload = data.get('sender_public_key')
+        sender_polynomial_payload = data.get('sender_polynomial')
+        recipients = data.get('recipients', [])
+
+        if not sender_guardian_id:
+            raise ValueError('sender_guardian_id is required')
+        if not sender_private_key_payload:
+            raise ValueError('sender_private_key is required')
+        if not sender_public_key_payload:
+            raise ValueError('sender_public_key is required')
+        if not sender_polynomial_payload:
+            raise ValueError('sender_polynomial is required')
+        if not isinstance(recipients, list) or len(recipients) == 0:
+            raise ValueError('recipients are required')
+
+        # Normalize sender key payloads (supports both dict and scalar forms)
+        sender_private_key_value = sender_private_key_payload
+        if isinstance(sender_private_key_payload, dict):
+            sender_private_key_value = sender_private_key_payload.get('private_key')
+
+        sender_public_key_value = sender_public_key_payload
+        if isinstance(sender_public_key_payload, dict):
+            sender_public_key_value = sender_public_key_payload.get('public_key')
+
+        sender_private_key = int_to_q(int(sender_private_key_value))
+        sender_public_key = int_to_p(int(sender_public_key_value))
+
+        # Deserialize polynomial payload
+        if isinstance(sender_polynomial_payload, dict):
+            if 'polynomial' in sender_polynomial_payload:
+                polynomial_data = sender_polynomial_payload['polynomial']
+                if isinstance(polynomial_data, dict):
+                    sender_polynomial = from_raw(ElectionPolynomial, json.dumps(polynomial_data))
+                else:
+                    sender_polynomial = from_binary_transport(ElectionPolynomial, polynomial_data)
+            else:
+                sender_polynomial = from_raw(ElectionPolynomial, json.dumps(sender_polynomial_payload))
+        else:
+            sender_polynomial = from_binary_transport(ElectionPolynomial, sender_polynomial_payload)
+
+        ceremony_details = CeremonyDetails(number_of_guardians, quorum)
+        sender_guardian = Guardian(
+            ElectionKeyPair(
+                owner_id=sender_guardian_id,
+                sequence_order=sender_sequence_order,
+                key_pair=ElGamalKeyPair(sender_private_key, sender_public_key),
+                polynomial=sender_polynomial,
+            ),
+            ceremony_details,
+        )
+
+        # Save recipient public keys so ElectionGuard can create encrypted backups
+        for recipient in recipients:
+            recipient_id = str(recipient.get('guardian_id') or recipient.get('guardianId') or '')
+            recipient_sequence_order = safe_int_conversion(recipient.get('sequence_order', recipient.get('sequenceOrder')))
+            recipient_public_key_value = recipient.get('public_key', recipient.get('publicKey'))
+
+            if not recipient_id:
+                raise ValueError('Each recipient must include guardian_id')
+            if recipient_public_key_value is None:
+                raise ValueError(f'Missing public key for recipient {recipient_id}')
+
+            recipient_public_key = ElectionPublicKey(
+                owner_id=recipient_id,
+                sequence_order=recipient_sequence_order,
+                key=int_to_p(int(recipient_public_key_value)),
+                coefficient_commitments=[],
+                coefficient_proofs=[],
+            )
+            sender_guardian.save_guardian_key(recipient_public_key)
+
+        sender_guardian.generate_election_partial_key_backups()
+
+        backups = {}
+        for recipient in recipients:
+            recipient_id = str(recipient.get('guardian_id') or recipient.get('guardianId'))
+            backup = sender_guardian.share_election_partial_key_backup(recipient_id)
+            backup_obj = get_optional(backup)
+            backups[recipient_id] = to_binary_transport(backup_obj)
+
+        response_payload = {
+            'status': 'success',
+            'guardian_data': {
+                'id': sender_guardian.id,
+                'sequence_order': sender_guardian.sequence_order,
+                'election_public_key': to_binary_transport(sender_guardian.share_key()),
+                'backups': backups,
+            },
+            'backup_count': len(backups),
+        }
+
+        return make_binary_response(response_payload, status=200)
+
+    except ValueError as e:
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=400)
+    except Exception as e:
+        return make_binary_response({'status': 'error', 'message': str(e)}, status=500)
+
 @app.route('/benaloh_challenge', methods=['POST'])
 @track_request('/benaloh_challenge')
 def api_benaloh_challenge():
@@ -827,7 +1033,7 @@ def api_benaloh_challenge():
         # Validate required fields
         required_fields = [
             'encrypted_ballot_with_nonce', 'party_names', 'candidate_names',
-            'candidate_name', 'joint_public_key', 'commitment_hash',
+            'candidate_names_to_verify', 'joint_public_key', 'commitment_hash',
             'number_of_guardians', 'quorum'
         ]
 
@@ -838,7 +1044,7 @@ def api_benaloh_challenge():
         encrypted_ballot_with_nonce = data['encrypted_ballot_with_nonce']
         party_names = data['party_names']
         candidate_names = data['candidate_names']
-        candidate_name = data['candidate_name']
+        candidate_names_to_verify = data['candidate_names_to_verify']
         joint_public_key = data['joint_public_key']
         commitment_hash = data['commitment_hash']
         number_of_guardians = safe_int_conversion(data['number_of_guardians'])
@@ -851,7 +1057,7 @@ def api_benaloh_challenge():
             encrypted_ballot_with_nonce=encrypted_ballot_with_nonce,
             party_names=party_names,
             candidate_names=candidate_names,
-            candidate_name=candidate_name,
+            candidate_names_to_verify=candidate_names_to_verify,
             joint_public_key=joint_public_key,
             commitment_hash=commitment_hash,
             number_of_guardians=number_of_guardians,
@@ -867,6 +1073,7 @@ def api_benaloh_challenge():
                 'match': result['match'],
                 'message': result['message'],
                 'ballot_id': result.get('ballot_id'),
+                'verified_candidates': result.get('verified_candidates', []),
                 'verified_candidate': result.get('verified_candidate'),
                 'expected_candidate': result.get('expected_candidate')
             })
@@ -968,14 +1175,14 @@ def api_list_published_ballots():
 def api_publish_existing_ballot():
     """API endpoint to publish an already created encrypted ballot with specific status."""
     try:
-        data = request.json
+        data = get_request_data()
         
         ballot_id = data.get('ballot_id')
         encrypted_ballot_response = data.get('encrypted_ballot_response')  
         ballot_status = data.get('ballot_status', 'CAST').upper()
         
         if not all([ballot_id, encrypted_ballot_response]):
-            return jsonify({
+            return make_binary_response({
                 "error": "Missing required fields", 
                 "required": ["ballot_id", "encrypted_ballot_response"],
                 "optional": ["ballot_status"]
@@ -990,10 +1197,10 @@ def api_publish_existing_ballot():
             ballot_status=ballot_status
         )
         
-        return jsonify(result), 200
+        return make_binary_response(result), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return make_binary_response({"error": str(e)}), 500
 
 @app.route('/create_encrypted_tally', methods=['POST'])
 @track_request('/create_encrypted_tally')
@@ -1022,6 +1229,7 @@ def api_create_encrypted_tally():
         # Get election data with safe int conversion
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
         quorum = safe_int_conversion(data.get('quorum', 1))
+        max_choices = safe_int_conversion(data.get('max_choices', 1))
         
         # Call service function
         service_start = time.time()
@@ -1035,7 +1243,8 @@ def api_create_encrypted_tally():
             number_of_guardians,
             quorum,
             create_election_manifest,
-            ciphertext_tally_to_raw
+            ciphertext_tally_to_raw,
+            max_choices=max_choices
         )
         service_elapsed = time.time() - service_start
         print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
@@ -1141,6 +1350,7 @@ def api_create_partial_decryption():
         # Get election data with safe int conversion
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
         quorum = safe_int_conversion(data.get('quorum', 1))
+        max_choices = safe_int_conversion(data.get('max_choices', 1))
         
         # Call service function with single guardian data
         service_start = time.time()
@@ -1161,7 +1371,8 @@ def api_create_partial_decryption():
             quorum,
             create_election_manifest,
             raw_to_ciphertext_tally,
-            compute_ballot_shares
+            compute_ballot_shares,
+            max_choices=max_choices
         )
         service_elapsed = time.time() - service_start
         print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
@@ -1262,6 +1473,7 @@ def api_create_compensated_decryption():
         # Get election data with safe int conversion
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', 1))
         quorum = safe_int_conversion(data.get('quorum', 1))
+        max_choices = safe_int_conversion(data.get('max_choices', 1))
         
         deserialize_elapsed = time.time() - deserialize_start
         
@@ -1285,7 +1497,8 @@ def api_create_compensated_decryption():
             quorum,
             create_election_manifest,
             raw_to_ciphertext_tally,
-            compute_compensated_ballot_shares
+            compute_compensated_ballot_shares,
+            max_choices=max_choices
         )
         service_elapsed = time.time() - service_start
 
@@ -1398,6 +1611,7 @@ def api_combine_decryption_shares():
         # Get the required quorum with safe int conversion
         quorum = safe_int_conversion(data.get('quorum', len(guardian_data)))
         number_of_guardians = safe_int_conversion(data.get('number_of_guardians', len(guardian_data)))
+        max_choices = safe_int_conversion(data.get('max_choices', 1))
         
         deserialize_elapsed = time.time() - deserialize_start
         print(f"✅ DESERIALIZATION COMPLETE: {deserialize_elapsed*1000:.2f}ms")
@@ -1450,7 +1664,8 @@ def api_combine_decryption_shares():
             create_election_manifest,
             raw_to_ciphertext_tally,
             generate_ballot_hash,
-            generate_ballot_hash_electionguard
+            generate_ballot_hash_electionguard,
+            max_choices=max_choices
         )
         service_elapsed = time.time() - service_start
         print(f"✅ COMPUTATION COMPLETE: {service_elapsed*1000:.2f}ms")
@@ -1511,10 +1726,16 @@ def encrypt_it():
         # Input validation (optimized)
         private_key = data['private_key']
         if not isinstance(private_key, str) or len(private_key) > 100000:
-            return jsonify({'error': 'Invalid private key format or size'}), 400
+            return make_binary_response({'error': 'Invalid private key format or size'}, 400)
 
-        # Generate optimized password and salt
-        password = generate_strong_password()
+        # Use guardian-provided password when supplied, otherwise generate random password
+        provided_password = data.get('password')
+        if provided_password is not None:
+            if not isinstance(provided_password, str) or len(provided_password) < 32:
+                return make_binary_response({'error': 'Invalid password format. Minimum length is 32 characters.'}, 400)
+            password = provided_password
+        else:
+            password = generate_strong_password()
         salt = os.urandom(SCRYPT_SALT_LENGTH)
         
         # Post-quantum operations (these are the fastest part)
@@ -1587,7 +1808,7 @@ def encrypt_it():
         logger.error(f"Encryption error: {str(e)}")
         return make_binary_response({'status': 'error', 'message': 'Internal server error'}, 500)
 
-@app.route('/api/decrypt', methods=['POST'])
+@app.route('/api/decrypt', methods=['POST', 'OPTIONS'])
 # @rate_limit(max_requests=10, window_minutes=1)
 def decrypt_it():
     """
@@ -1597,15 +1818,37 @@ def decrypt_it():
     - encrypted_data: The encrypted private key (from Storage 1)
     - credentials: Contains all metadata + HMAC tag (from Storage 2)
     """
+    is_msgpack_client = 'msgpack' in (request.content_type or '')
+
     if not PQ_AVAILABLE:
         logger.error("Post-quantum cryptography not available")
-        return make_binary_response({'error': 'Post-quantum cryptography not available'}, 501)
+        if is_msgpack_client:
+            return make_binary_response({'error': 'Post-quantum cryptography not available'}, 501)
+        response = jsonify({'status': 'error', 'message': 'Post-quantum cryptography not available'})
+        return response, 501
+
+    cors_headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    }
+
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        for k, v in cors_headers.items():
+            response.headers[k] = v
+        return response, 200
 
     data = get_request_data()
     validation_error = validate_input(data, ['encrypted_data', 'credentials'])
     if validation_error:
         logger.warning(f"Validation error: {validation_error}")
-        return make_binary_response({'error': validation_error}, 400)
+        if is_msgpack_client:
+            return make_binary_response({'error': validation_error}, 400)
+        response = jsonify({'status': 'error', 'message': validation_error})
+        for k, v in cors_headers.items():
+            response.headers[k] = v
+        return response, 400
 
     try:
         # Fast decode and parse credentials
@@ -1614,11 +1857,21 @@ def decrypt_it():
         
         # Version check
         if credentials.get('version') != '1.0':
-            return make_binary_response({'error': 'Unsupported credential version'}, 400)
+            if is_msgpack_client:
+                return make_binary_response({'error': 'Unsupported credential version'}, 400)
+            response = jsonify({'status': 'error', 'message': 'Unsupported credential version'})
+            for k, v in cors_headers.items():
+                response.headers[k] = v
+            return response, 400
         
         # Extract HMAC tag from credentials
         if 'hmac_tag' not in credentials:
-            return make_binary_response({'error': 'Missing HMAC tag in credentials'}, 400)
+            if is_msgpack_client:
+                return make_binary_response({'error': 'Missing HMAC tag in credentials'}, 400)
+            response = jsonify({'status': 'error', 'message': 'Missing HMAC tag in credentials'})
+            for k, v in cors_headers.items():
+                response.headers[k] = v
+            return response, 400
         
         hmac_tag = base64.b64decode(credentials['hmac_tag'])
         
@@ -1659,7 +1912,12 @@ def decrypt_it():
         
         if not verify_hmac(hmac_key, credentials_for_verification_json, hmac_tag):
             logger.warning(f"HMAC verification failed for IP: {request.remote_addr}")
-            return make_binary_response({'error': 'Authentication failed - credentials tampered'}, 403)
+            if is_msgpack_client:
+                return make_binary_response({'error': 'Authentication failed - credentials tampered'}, 403)
+            response = jsonify({'status': 'error', 'message': 'Authentication failed - credentials tampered'})
+            for k, v in cors_headers.items():
+                response.headers[k] = v
+            return response, 403
 
         # Fast decryption of private key
         nonce = base64.b64decode(credentials['nonce'])
@@ -1671,15 +1929,29 @@ def decrypt_it():
         decrypted_data = decryptor.update(encrypted_data) + decryptor.finalize()
 
         logger.info(f"Successful decryption for IP: {request.remote_addr}")
+
+        if is_msgpack_client:
+            return make_binary_response({
+                'status': 'success',
+                'private_key': decrypted_data.decode('utf-8')
+            })
         
-        return make_binary_response({
+        response = jsonify({
             'status': 'success',
             'private_key': decrypted_data.decode('utf-8')
         })
+        for k, v in cors_headers.items():
+            response.headers[k] = v
+        return response, 200
 
     except Exception as e:
         logger.error(f"Decryption error: {str(e)}")
-        return make_binary_response({'status': 'error', 'message': 'Decryption failed'}, 400)
+        if is_msgpack_client:
+            return make_binary_response({'status': 'error', 'message': 'Decryption failed'}, 400)
+        response = jsonify({'status': 'error', 'message': 'Decryption failed'})
+        for k, v in cors_headers.items():
+            response.headers[k] = v
+        return response, 400
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -1693,10 +1965,14 @@ def health_check():
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
+    if 'msgpack' in (request.content_type or ''):
+        return make_binary_response({'error': 'Request too large'}, 413)
     return jsonify({'error': 'Request too large'}), 413
 
 @app.errorhandler(429)
 def rate_limit_exceeded(error):
+    if 'msgpack' in (request.content_type or ''):
+        return make_binary_response({'error': 'Rate limit exceeded'}, 429)
     return jsonify({'error': 'Rate limit exceeded'}), 429
 
 if __name__ == '__main__':
