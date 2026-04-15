@@ -79,7 +79,7 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
 #                          With 3 workers × 50 = 150 total capacity
 CMD ["gunicorn", \
     "--bind", "0.0.0.0:5001", \
-    "--workers", "4", \
+    "--workers", "2", \
     "--worker-class", "sync", \
     "--threads", "1", \
     "--max-requests", "5000", \
